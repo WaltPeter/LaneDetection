@@ -321,8 +321,8 @@ class Camera:
 
         # Preprocessing. 
         # self.img = cv2.warpPerspective(self.img, self.M, (1280, 720), cv2.INTER_LINEAR)
-        edges = cv2.Canny(cv2.cvtColor(self.img, cv2.COLOR_BGR2GRAY), 50, 150, apertureSize=3)
-        self.lines = cv2.HoughLines(edges, 1, np.pi/180, 175 if np.sum(self.img) > 75000000 else 200)
+        # edges = cv2.Canny(cv2.cvtColor(self.img, cv2.COLOR_BGR2GRAY), 50, 150, apertureSize=3)
+        # self.lines = cv2.HoughLines(edges, 1, np.pi/180, 175 if np.sum(self.img) > 75000000 else 200)
 
         self.binary = cv2.threshold(cv2.cvtColor(self.img, cv2.COLOR_BGR2GRAY), 125, 255, cv2.THRESH_BINARY)[1]
 
