@@ -232,7 +232,14 @@ class Camera:
                             gradient_list[-1] += 2 * np.mean(gradient_list[:-2]) 
                             gradient_list[-1] /= 3
             
-            group_gradient.append( np.average(gradient_list)  ) 
+            # Fit polynomial. 
+            if confidence > 0 or len(group) >= 3:  
+                # Second degree polynomial. 
+                a, b, c = np.polyfit([p.current[0] for p in group], [p.current[1] for p in group], deg=2) 
+                # cv2.putText(self.img, str(a), tuple(group[0].current), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,0), 2) 
+                group_gradient.append( a / abs(a) * np.average(gradient_list)  )
+            else: 
+                group_gradient.append( np.average(gradient_list)  ) 
 
         weighted = [len(i) for i in self.groupedParticles] / np.sum([len(i) for i in self.groupedParticles]) 
         avg_gradient = np.sum(np.multiply(group_gradient, weighted))  
@@ -368,7 +375,7 @@ if __name__ == "__main__":
     # else 
     else: 
         while cam.detectLane(): 
-            if cv2.waitKey(1) == 27: break  
+            if cv2.waitKey(500) == 27: break  
         cv2.destroyAllWindows() 
     # endif 
        
