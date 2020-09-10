@@ -7,7 +7,8 @@ import math
 from time import time 
 
 # define 
-ROS = False 
+ROS = False  # Enable ROS communication? 
+RECORD = True  # Record videos? 
 
 LANE_UNDETECTED = 0
 LANE_DETECTED = 1
@@ -162,12 +163,14 @@ class Camera:
         for j in sorted([k for k in self.particles]): 
             particle = self.particles[j] 
             if particle is None: continue 
-            # if self.pedestrianFound: 
-            #     if particle.current[0] > self.pedestrianBndbox[0][0] \
-            #         and particle.current[0] < self.pedestrianBndbox[1][0] \
-            #         and particle.current[1] > self.pedestrianBndbox[0][1] \
-            #         and particle.current[1] < self.pedestrianBndbox[1][1]: 
-            #         continue 
+            if self.pedestrianFound: 
+                p_w = self.pedestrianBndbox[1][0] - self.pedestrianBndbox[0][0]
+                p_h = self.pedestrianBndbox[1][1] - self.pedestrianBndbox[0][1]
+                if particle.current[0] > self.pedestrianBndbox[0][0] + p_w / 4 \
+                    and particle.current[0] < self.pedestrianBndbox[1][0] - p_w / 4 \
+                    and particle.current[1] > self.pedestrianBndbox[0][1] + p_h / 3 \
+                    and particle.current[1] < self.pedestrianBndbox[1][1]: 
+                    continue 
             for i, contour in enumerate(self.contours): 
                 distance = cv2.pointPolygonTest(contour, particle.current, True) 
                 if distance >= 0: 
@@ -203,6 +206,7 @@ class Camera:
     def decision(self): 
         confidence = 0 
         group_gradient = list() 
+
         for group in self.groupedParticles: 
             gradient_list = list() 
             for i, particle in enumerate(group): 
@@ -212,24 +216,25 @@ class Camera:
                     pt2 = particle.current 
                     if group[i-1] is None: continue 
                     pt1 = group[i-1].current 
-                    gradient_list.append( (pt2[1] - pt1[1]) / (pt2[0] - pt1[0] + 1e-5) / 720 * 1280) 
+                    gradient_list.append( (pt2[1] - pt1[1]) / (pt2[0] - pt1[0] + 1e-5) / 720 * 1280 ) 
 
                     if len(gradient_list) > 1: 
                         if np.std(gradient_list) > 10: 
                             confidence -= 1 
-                            gradient_list[-1] += gradient_list[-2] 
-                            gradient_list[-1] /= 2
+                            gradient_list[-1] += 2 * np.mean(gradient_list[:-2]) 
+                            gradient_list[-1] /= 3
             
-            group_gradient.append( np.average(gradient_list) )
+            group_gradient.append( np.average(gradient_list)  ) 
 
         weighted = [len(i) for i in self.groupedParticles] / np.sum([len(i) for i in self.groupedParticles]) 
         avg_gradient = np.sum(np.multiply(group_gradient, weighted))  
+
         if str(avg_gradient) == "nan": avg_gradient = 0  
-        if avg_gradient < 0 and avg_gradient > -1000: 
+        if avg_gradient < 0 and avg_gradient > -1000 and confidence > 0: 
             direction =   1                  # Right
-        elif avg_gradient > 0 and avg_gradient < 1000: 
+        elif avg_gradient > 0 and avg_gradient < 1000 and confidence > 0: 
             direction =   -1                  # Left
-        else: direction = 0               # Straight 
+        else: direction = 0; steerAngle = 0               # Straight 
 
         # Steering Angle (deg)
         steerAngle = math.atan(-avg_gradient) * 180 / math.pi + 90 if confidence > 0 else 0 
@@ -259,22 +264,24 @@ class Camera:
         try: self.src_wr.write(self.img) 
         except: pass # Record src video. 
 
+        self.img = cv2.resize(self.img[480:], (self.img.shape[1], self.img.shape[0]))  
+
         # Preprocessing. 
-        self.img = cv2.warpPerspective(self.img, self.M, (1280, 720), cv2.INTER_LINEAR)
-        edges = cv2.Canny(cv2.cvtColor(self.img, cv2.COLOR_BGR2GRAY), 50, 150, apertureSize=3)
-        lines = cv2.HoughLines(edges, 1, np.pi/180, 175 if np.sum(self.img) > 75000000 else 200)
-        if lines is not None: 
-            for line in lines:
-                rho,theta = line[0]
-                a = np.cos(theta)
-                b = np.sin(theta)
-                x0 = a*rho
-                y0 = b*rho
-                x1 = int(x0 + 1000*(-b))
-                y1 = int(y0 + 1000*(a))
-                x2 = int(x0 - 1000*(-b))
-                y2 = int(y0 - 1000*(a))
-                cv2.line(self.img,(x1,y1),(x2,y2),(0,0,0),2)
+        # self.img = cv2.warpPerspective(self.img, self.M, (1280, 720), cv2.INTER_LINEAR)
+        # edges = cv2.Canny(cv2.cvtColor(self.img, cv2.COLOR_BGR2GRAY), 50, 150, apertureSize=3)
+        # lines = cv2.HoughLines(edges, 1, np.pi/180, 175 if np.sum(self.img) > 75000000 else 200)
+        # if lines is not None: 
+        #     for line in lines:
+        #         rho,theta = line[0]
+        #         a = np.cos(theta)
+        #         b = np.sin(theta)
+        #         x0 = a*rho
+        #         y0 = b*rho
+        #         x1 = int(x0 + 1000*(-b))
+        #         y1 = int(y0 + 1000*(a))
+        #         x2 = int(x0 - 1000*(-b))
+        #         y2 = int(y0 - 1000*(a))
+        #         cv2.line(self.img,(x1,y1),(x2,y2),(0,0,0),2)
 
         self.binary = cv2.threshold(cv2.cvtColor(self.img, cv2.COLOR_BGR2GRAY), 125, 255, cv2.THRESH_BINARY)[1]
 
@@ -315,7 +322,7 @@ class Camera:
         
 if __name__ == "__main__":
 
-    cam = Camera(path="/dev/video10", record=True) # Setup camera with path 
+    cam = Camera(path="../../2/origin (2).avi", record=RECORD) # Setup camera with path 
 
     # ifdef 
     if ROS: 
