@@ -7,7 +7,7 @@ import math
 from time import time 
 
 # define 
-ROS = False  # Enable ROS communication? 
+ROS = True  # Enable ROS communication? 
 RECORD = True  # Record videos? 
 
 LANE_UNDETECTED = 0
@@ -159,6 +159,9 @@ class Camera:
         # @struct: dict<list: idx of particle>: key=idx of contour
         sortParticlesByContours = dict() 
 
+        # Find all white contours in self.binary. 
+        _, self.contours, self.hierarchy = cv2.findContours(self.binary, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE) 
+
         # For every contour, find all particles in that contour and sorted in a dict of list. 
         for j in sorted([k for k in self.particles]): 
             particle = self.particles[j] 
@@ -204,6 +207,9 @@ class Camera:
             cv2.rectangle(self.img, tuple(self.pedestrianBndbox[0]), tuple(self.pedestrianBndbox[1]), (0,255,255), 10) 
 
     def decision(self): 
+        if self.pedestrianFound: self._pedestrianSegmentation() 
+        self.sortAndFilterParticlesByContours() 
+
         confidence = 0 
         group_gradient = list() 
 
@@ -234,7 +240,7 @@ class Camera:
             direction =   1                  # Right
         elif avg_gradient > 0 and avg_gradient < 1000 and confidence > 0: 
             direction =   -1                  # Left
-        else: direction = 0; steerAngle = 0               # Straight 
+        else: direction = 0; steerAngle = 0   # Straight 
 
         # Steering Angle (deg)
         steerAngle = math.atan(-avg_gradient) * 180 / math.pi + 90 if confidence > 0 else 0 
@@ -242,8 +248,9 @@ class Camera:
         if steerAngle > 45: steerAngle = 90 - steerAngle 
 
         steerAngle *= direction 
-        self.kalman.update(steerAngle) 
-        steerAngle = self.kalman.predict()
+        if confidence > 0: 
+            self.kalman.update(steerAngle) 
+            steerAngle = self.kalman.predict()
 
         if steerAngle > 0: direction = "---->" 
         elif steerAngle < 0: direction = "<----" 
@@ -254,6 +261,22 @@ class Camera:
         cv2.putText(self.img, "SteerAngle: %.1f deg"%(steerAngle), (500,100), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0,255,0), 2) 
 
         return confidence, direction, steerAngle 
+
+    def _pedestrianSegmentation(self): 
+        if self.lines is not None: 
+            for line in self.lines:
+                rho, theta = line[0]
+                a = np.cos(theta)
+                b = np.sin(theta)
+                x0 = a*rho
+                y0 = b*rho
+                x1 = int(x0 + 1000*(-b))
+                y1 = int(y0 + 1000*(a))
+                x2 = int(x0 - 1000*(-b))
+                y2 = int(y0 - 1000*(a))
+                cv2.line(self.binary,(x1,y1),(x2,y2),(0),2) 
+            cv2.imshow("pedes", self.binary) 
+            cv2.waitKey(0) 
         
     def detectLane(self):
         start = time() 
@@ -268,28 +291,12 @@ class Camera:
 
         # Preprocessing. 
         # self.img = cv2.warpPerspective(self.img, self.M, (1280, 720), cv2.INTER_LINEAR)
-        # edges = cv2.Canny(cv2.cvtColor(self.img, cv2.COLOR_BGR2GRAY), 50, 150, apertureSize=3)
-        # lines = cv2.HoughLines(edges, 1, np.pi/180, 175 if np.sum(self.img) > 75000000 else 200)
-        # if lines is not None: 
-        #     for line in lines:
-        #         rho,theta = line[0]
-        #         a = np.cos(theta)
-        #         b = np.sin(theta)
-        #         x0 = a*rho
-        #         y0 = b*rho
-        #         x1 = int(x0 + 1000*(-b))
-        #         y1 = int(y0 + 1000*(a))
-        #         x2 = int(x0 - 1000*(-b))
-        #         y2 = int(y0 - 1000*(a))
-        #         cv2.line(self.img,(x1,y1),(x2,y2),(0,0,0),2)
+        edges = cv2.Canny(cv2.cvtColor(self.img, cv2.COLOR_BGR2GRAY), 50, 150, apertureSize=3)
+        self.lines = cv2.HoughLines(edges, 1, np.pi/180, 175 if np.sum(self.img) > 75000000 else 200)
 
         self.binary = cv2.threshold(cv2.cvtColor(self.img, cv2.COLOR_BGR2GRAY), 125, 255, cv2.THRESH_BINARY)[1]
 
-        # Find all white contours in self.binary. 
-        _, self.contours, self.hierarchy = cv2.findContours(self.binary, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE) 
-
         self.getParticles()
-        self.sortAndFilterParticlesByContours() 
 
         detectionConfident, driveDirection, steerAngle = self.decision() 
         cv2.imshow("thresh", self.binary) 
