@@ -8,7 +8,7 @@ from time import time
 
 # define 
 ROS = True  # Enable ROS communication? 
-RECORD = True  # Record videos? 
+RECORD = False  # Record videos? 
 
 LANE_UNDETECTED = 0
 LANE_DETECTED = 1
@@ -92,7 +92,7 @@ class Camera:
             self.dst_wr.release() 
         except: pass 
 
-    def getParticles(self, num_particles=20, padding_top=20, size=40): 
+    def getParticles(self, num_particles=10, padding_top=20, size=40): 
         # @param: num_particles: int: max num of particles. 
         # @param: padding_top: int: verticle spacing from top to the 1st particle. 
 
@@ -167,11 +167,9 @@ class Camera:
             particle = self.particles[j] 
             if particle is None: continue 
             if self.pedestrianFound: 
-                p_w = self.pedestrianBndbox[1][0] - self.pedestrianBndbox[0][0]
-                p_h = self.pedestrianBndbox[1][1] - self.pedestrianBndbox[0][1]
-                if particle.current[0] > self.pedestrianBndbox[0][0] + p_w / 4 \
-                    and particle.current[0] < self.pedestrianBndbox[1][0] - p_w / 4 \
-                    and particle.current[1] > self.pedestrianBndbox[0][1] + p_h / 3 \
+                if particle.current[0] > self.pedestrianBndbox[0][0] \
+                    and particle.current[0] < self.pedestrianBndbox[1][0] \
+                    and particle.current[1] > self.pedestrianBndbox[0][1] \
                     and particle.current[1] < self.pedestrianBndbox[1][1]: 
                     continue 
             for i, contour in enumerate(self.contours): 
@@ -207,8 +205,12 @@ class Camera:
             cv2.rectangle(self.img, tuple(self.pedestrianBndbox[0]), tuple(self.pedestrianBndbox[1]), (0,255,255), 10) 
 
     def decision(self): 
-        if self.pedestrianFound: self._pedestrianSegmentation() 
+        # if self.pedestrianFound: self._pedestrianSegmentation() 
         self.sortAndFilterParticlesByContours() 
+        if self.pedestrianFound: 
+            confidence_direction_steerAngle = self._getPedestrianGuideLine() 
+            if confidence_direction_steerAngle is not None: 
+                return confidence_direction_steerAngle 
 
         confidence = 0 
         group_gradient = list() 
@@ -275,8 +277,29 @@ class Camera:
                 x2 = int(x0 - 1000*(-b))
                 y2 = int(y0 - 1000*(a))
                 cv2.line(self.binary,(x1,y1),(x2,y2),(0),2) 
-            cv2.imshow("pedes", self.binary) 
-            cv2.waitKey(0) 
+
+    def _getPedestrianGuideLine(self): 
+        angle_list = list() 
+        for i, contour in enumerate(self.contours): 
+            hierarchy = self.hierarchy[0][i]
+            area = cv2.contourArea(contour) 
+            if hierarchy[3] == 0 or area < self.img.shape[0] * self.img.shape[1] * 0.05: continue 
+            center, size, angle = cv2.minAreaRect(contour) 
+            if area / (size[0]*size[1]) > 0.6: 
+                cv2.drawContours(self.img, [contour], -1, (0,255,255), -1) 
+                if size[0] < size[1]: angle -= 90 
+                angle = abs(angle) 
+                if angle >= 90: angle = -(angle - 90) 
+                else: angle: 90 - angle 
+                angle_list.append(angle) 
+        if len(angle_list) > 0: 
+            steerAngle = np.mean(angle_list) 
+            if steerAngle > 0: direction = "---->" 
+            elif steerAngle < 0: direction = "<----" 
+            else: direction = "Straight"
+            confidence = len(angle_list)
+            return confidence, direction, steerAngle 
+        else: return None 
         
     def detectLane(self):
         start = time() 
@@ -345,7 +368,7 @@ if __name__ == "__main__":
     # else 
     else: 
         while cam.detectLane(): 
-            if cv2.waitKey(100) == 27: break  
+            if cv2.waitKey(1) == 27: break  
         cv2.destroyAllWindows() 
     # endif 
        
