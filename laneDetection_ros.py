@@ -7,7 +7,7 @@ import math
 from time import time 
 
 # define 
-ROS = False  # Enable ROS communication? 
+ROS = True  # Enable ROS communication? 
 RECORD = True  # Record videos? 
 
 LANE_UNDETECTED = 0
@@ -334,7 +334,7 @@ class Camera:
         
 if __name__ == "__main__":
 
-    cam = Camera(path="../../2/1/origin.avi", record=RECORD) # Setup camera with path 
+    cam = Camera(path="../../2/2/origin.avi", record=RECORD) # Setup camera with path 
 
     # ifdef 
     if ROS: 
