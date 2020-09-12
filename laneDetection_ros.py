@@ -7,8 +7,8 @@ import math
 from time import time 
 
 # define 
-ROS = True  # Enable ROS communication? 
-RECORD = False  # Record videos? 
+ROS = False  # Enable ROS communication? 
+RECORD = True  # Record videos? 
 
 LANE_UNDETECTED = 0
 LANE_DETECTED = 1
@@ -81,6 +81,7 @@ class Camera:
         dst_points = np.array([[300, 686.], [266., 119], [931., 120], [931., 701.]], dtype="float32")
         self.M = cv2.getPerspectiveTransform(src_points, dst_points)
         self.kalman = KalmanFilter() 
+        self._prev_angle = 0 
         if record: 
             self.src_wr = VideoRecorder("SRC_")
             self.dst_wr = VideoRecorder("DST_") 
@@ -92,7 +93,7 @@ class Camera:
             self.dst_wr.release() 
         except: pass 
 
-    def getParticles(self, num_particles=10, padding_top=20, size=40): 
+    def getParticles(self, num_particles=10, padding_top=20, size=60): 
         # @param: num_particles: int: max num of particles. 
         # @param: padding_top: int: verticle spacing from top to the 1st particle. 
 
@@ -208,9 +209,18 @@ class Camera:
         # if self.pedestrianFound: self._pedestrianSegmentation() 
         self.sortAndFilterParticlesByContours() 
         if self.pedestrianFound: 
-            confidence_direction_steerAngle = self._getPedestrianGuideLine() 
-            if confidence_direction_steerAngle is not None: 
-                return confidence_direction_steerAngle 
+            try: 
+                # confidence, direction, steerAngle = self._getPedestrianGuideLine() 
+                confidence = 1 
+                steerAngle = self._prev_angle 
+                if steerAngle > 0: direction = "---->" 
+                elif steerAngle < 0: direction = "<----" 
+                else: direction = "Straight"
+                cv2.putText(self.img, "Confidence: {}".format(confidence), (500,50), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0,255,0), 2) 
+                cv2.putText(self.img, "Direction: {}".format(direction), (500,75), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0,255,0), 2) 
+                cv2.putText(self.img, "SteerAngle: %.1f deg"%(steerAngle), (500,100), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0,255,0), 2) 
+                return confidence, direction, steerAngle 
+            except: pass 
 
         confidence = 0 
         group_gradient = list() 
@@ -236,7 +246,6 @@ class Camera:
             if confidence > 0 or len(group) >= 3:  
                 # Second degree polynomial. 
                 a, b, c = np.polyfit([p.current[0] for p in group], [p.current[1] for p in group], deg=2) 
-                # cv2.putText(self.img, str(a), tuple(group[0].current), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,0), 2) 
                 group_gradient.append( a / abs(a) * np.average(gradient_list)  )
             else: 
                 group_gradient.append( np.average(gradient_list)  ) 
@@ -257,9 +266,11 @@ class Camera:
         if steerAngle > 45: steerAngle = 90 - steerAngle 
 
         steerAngle *= direction 
-        if confidence > 0: 
-            self.kalman.update(steerAngle) 
-            steerAngle = self.kalman.predict()
+        # if confidence > 0: 
+        #     self.kalman.update(steerAngle) 
+        #     steerAngle = self.kalman.predict()
+        
+        self._prev_angle = steerAngle 
 
         if steerAngle > 0: direction = "---->" 
         elif steerAngle < 0: direction = "<----" 
@@ -270,43 +281,6 @@ class Camera:
         cv2.putText(self.img, "SteerAngle: %.1f deg"%(steerAngle), (500,100), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0,255,0), 2) 
 
         return confidence, direction, steerAngle 
-
-    def _pedestrianSegmentation(self): 
-        if self.lines is not None: 
-            for line in self.lines:
-                rho, theta = line[0]
-                a = np.cos(theta)
-                b = np.sin(theta)
-                x0 = a*rho
-                y0 = b*rho
-                x1 = int(x0 + 1000*(-b))
-                y1 = int(y0 + 1000*(a))
-                x2 = int(x0 - 1000*(-b))
-                y2 = int(y0 - 1000*(a))
-                cv2.line(self.binary,(x1,y1),(x2,y2),(0),2) 
-
-    def _getPedestrianGuideLine(self): 
-        angle_list = list() 
-        for i, contour in enumerate(self.contours): 
-            hierarchy = self.hierarchy[0][i]
-            area = cv2.contourArea(contour) 
-            if hierarchy[3] == 0 or area < self.img.shape[0] * self.img.shape[1] * 0.05: continue 
-            center, size, angle = cv2.minAreaRect(contour) 
-            if area / (size[0]*size[1]) > 0.6: 
-                cv2.drawContours(self.img, [contour], -1, (0,255,255), -1) 
-                if size[0] < size[1]: angle -= 90 
-                angle = abs(angle) 
-                if angle >= 90: angle = -(angle - 90) 
-                else: angle: 90 - angle 
-                angle_list.append(angle) 
-        if len(angle_list) > 0: 
-            steerAngle = np.mean(angle_list) 
-            if steerAngle > 0: direction = "---->" 
-            elif steerAngle < 0: direction = "<----" 
-            else: direction = "Straight"
-            confidence = len(angle_list)
-            return confidence, direction, steerAngle 
-        else: return None 
         
     def detectLane(self):
         start = time() 
@@ -324,7 +298,8 @@ class Camera:
         # edges = cv2.Canny(cv2.cvtColor(self.img, cv2.COLOR_BGR2GRAY), 50, 150, apertureSize=3)
         # self.lines = cv2.HoughLines(edges, 1, np.pi/180, 175 if np.sum(self.img) > 75000000 else 200)
 
-        self.binary = cv2.threshold(cv2.cvtColor(self.img, cv2.COLOR_BGR2GRAY), 125, 255, cv2.THRESH_BINARY)[1]
+        # self.binary = cv2.threshold(cv2.cvtColor(self.img, cv2.COLOR_BGR2GRAY), 125, 255, cv2.THRESH_BINARY)[1]
+        self.binary = cv2.inRange(cv2.cvtColor(self.img, cv2.COLOR_BGR2HSV), (0, 0, 200), (180, 40, 255)) 
 
         self.getParticles()
 
@@ -359,7 +334,7 @@ class Camera:
         
 if __name__ == "__main__":
 
-    cam = Camera(path="../../2/origin (2).avi", record=RECORD) # Setup camera with path 
+    cam = Camera(path="../../2/1/origin.avi", record=RECORD) # Setup camera with path 
 
     # ifdef 
     if ROS: 
@@ -375,7 +350,7 @@ if __name__ == "__main__":
     # else 
     else: 
         while cam.detectLane(): 
-            if cv2.waitKey(500) == 27: break  
+            if cv2.waitKey(1) == 27: break  
         cv2.destroyAllWindows() 
     # endif 
        
