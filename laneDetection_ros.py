@@ -8,7 +8,7 @@ from time import time
 
 # define 
 ROS = True  # Enable ROS communication? 
-RECORD = True  # Record videos? 
+RECORD = False  # Record videos? 
 
 LANE_UNDETECTED = 0
 LANE_DETECTED = 1
@@ -272,6 +272,7 @@ class Camera:
             else: 
                 if self.groupedParticles[0][-1].current[0] > cx: self.isOverboundary = True 
         if self.isOverboundary: 
+            coefficient = -coefficient / abs(coefficient) 
             cv2.circle(self.img, (int(key_point[-1]), cy), 10, (255,100,255), -1) 
             cv2.putText(self.img, "Overboundary", (cx-100, cy+50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,100,255), 3)
 
