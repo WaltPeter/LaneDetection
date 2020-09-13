@@ -86,6 +86,14 @@ class Camera:
             self.src_wr = VideoRecorder("SRC_")
             self.dst_wr = VideoRecorder("DST_") 
 
+        # ifdef ROS 
+        if ROS: 
+            self.imagePub = rospy.Publisher('images', Image, queue_size=1)
+            self.cmdPub = rospy.Publisher('lane_vel', Twist, queue_size=1)
+            self.cam_cmd = Twist()
+            self.cvb = CvBridge()
+        # endif 
+
     def __del__(self):
         self.cap.release()
         try: 
@@ -286,11 +294,6 @@ class Camera:
             self.cmdPub.publish(self.cam_cmd)
             self.imagePub.publish(self.cvb.cv2_to_imgmsg(self.binary))  # self.binary
         # endif
-
-        duration = time() - start 
-        print("fps", 1/duration) 
-        
-        return ret 
         
         cv2.imshow("thresh", self.binary)
         cv2.imshow("result", self.img)
@@ -299,6 +302,8 @@ class Camera:
         
         duration = time() - start 
         print("fps", 1/duration) 
+
+        return ret 
 
         
 if __name__ == "__main__":
