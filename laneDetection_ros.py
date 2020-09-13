@@ -7,7 +7,7 @@ import math
 from time import time 
 
 # define 
-ROS = False  # Enable ROS communication? 
+ROS = True  # Enable ROS communication? 
 RECORD = True  # Record videos? 
 
 LANE_UNDETECTED = 0
@@ -233,8 +233,11 @@ class Camera:
             key_point.append( np.average(x_vals) ) 
             cv2.line(self.img, (int(key_point[-1]), cy), (cx, cy), (0,255,0), 5) 
             cv2.circle(self.img, (int(key_point[-1]), cy), 10, (100,255,100), -1) 
+            cv2.circle(self.img, tuple(group[-1].current), 10, (0,0,0), -1) 
 
+        idxs = [0,1]
         if len(key_point) >= 2: 
+            if key_point[1] < key_point[0]: idx = [1,0]
             left_lane, right_lane = sorted(key_point[:2])  
         else: 
             if key_point[0] < cx: 
@@ -255,6 +258,22 @@ class Camera:
         # @return range [-1, 1]
         coefficient = max(r_ratio, l_ratio)-0.5 if r_ratio > l_ratio else -max(r_ratio, l_ratio)+0.5 
         coefficient *= 2 
+
+        # Overboundary check. 
+        self.isOverboundary = False 
+        if len(key_point) >= 2: 
+            if coefficient < 0: 
+                if self.groupedParticles[idxs[1]][-1].current[0] < cx: self.isOverboundary = True 
+            else: 
+                if self.groupedParticles[idx[0]][-1].current[0] > cx: self.isOverboundary = True 
+        else: 
+            if coefficient < 0: 
+                if self.groupedParticles[0][-1].current[0] < cx: self.isOverboundary = True 
+            else: 
+                if self.groupedParticles[0][-1].current[0] > cx: self.isOverboundary = True 
+        if self.isOverboundary: 
+            cv2.circle(self.img, (int(key_point[-1]), cy), 10, (255,100,255), -1) 
+            cv2.putText(self.img, "Overboundary", (cx-100, cy+50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,100,255), 3)
 
         self._prev_angle = coefficient
 
@@ -313,7 +332,7 @@ class Camera:
         
 if __name__ == "__main__":
 
-    cam = Camera(path="../../2/origin (2).avi", record=RECORD) # TODO: Setup camera with path 
+    cam = Camera(path="../../2/2/origin.avi", record=RECORD) # TODO: Setup camera with path 
 
     # ifdef 
     if ROS: 
@@ -329,7 +348,7 @@ if __name__ == "__main__":
     # else 
     else: 
         while cam.detectLane(): 
-            if cv2.waitKey(1) == 27: break  
+            if cv2.waitKey(500) == 27: break  
         cv2.destroyAllWindows() 
     # endif 
        
