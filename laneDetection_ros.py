@@ -252,8 +252,9 @@ class Camera:
         # Calculate steer angle coefficient. 
         l_ratio = dist_left / dist_total 
         r_ratio = dist_right / dist_total 
-        # @return range [0, 0.5], [-0, -0.5]
+        # @return range [-1, 1]
         coefficient = max(r_ratio, l_ratio)-0.5 if r_ratio > l_ratio else -max(r_ratio, l_ratio)+0.5 
+        coefficient *= 2 
 
         self._prev_angle = coefficient
 
