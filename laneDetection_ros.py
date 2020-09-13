@@ -7,7 +7,7 @@ import math
 from time import time 
 
 # define 
-ROS = True  # Enable ROS communication? 
+ROS = False  # Enable ROS communication? 
 RECORD = True  # Record videos? 
 
 LANE_UNDETECTED = 0
@@ -246,14 +246,14 @@ class Camera:
 
         # Calculate distance. 
         dist_left = abs(cx - left_lane) 
-        dist_right = abs(right_lane - cy)  
+        dist_right = abs(right_lane - cx)  
         dist_total = dist_left + dist_right 
 
         # Calculate steer angle coefficient. 
         l_ratio = dist_left / dist_total 
         r_ratio = dist_right / dist_total 
-        coefficient = r_ratio - l_ratio 
-        if coefficient < 0: coefficient = -(l_ratio - r_ratio) 
+        # @return range [0, 0.5], [-0, -0.5]
+        coefficient = max(r_ratio, l_ratio)-0.5 if r_ratio > l_ratio else -max(r_ratio, l_ratio)+0.5 
 
         self._prev_angle = coefficient
 
@@ -300,8 +300,10 @@ class Camera:
         
         cv2.imshow("thresh", self.binary)
         cv2.imshow("result", self.img)
-        cv2.waitKey(1)
-        
+
+        # ifdef ROS 
+        if ROS: cv2.waitKey(1)
+
         duration = time() - start 
         print("fps", 1/duration) 
 
