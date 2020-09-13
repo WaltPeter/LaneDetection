@@ -7,7 +7,7 @@ import math
 from time import time 
 
 # define 
-ROS = False  # Enable ROS communication? 
+ROS = True  # Enable ROS communication? 
 RECORD = True  # Record videos? 
 
 LANE_UNDETECTED = 0
@@ -253,7 +253,7 @@ class Camera:
         l_ratio = dist_left / dist_total 
         r_ratio = dist_right / dist_total 
         coefficient = r_ratio - l_ratio 
-        if coefficient < 0: coefficient = -(1 + coefficient) 
+        if coefficient < 0: coefficient = -(l_ratio - r_ratio) 
 
         self._prev_angle = coefficient
 
