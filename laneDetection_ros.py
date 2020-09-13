@@ -7,8 +7,8 @@ import math
 from time import time 
 
 # define 
-ROS = True  # Enable ROS communication? 
-RECORD = False  # Record videos? 
+ROS = False  # Enable ROS communication? 
+RECORD = True  # Record videos? 
 
 LANE_UNDETECTED = 0
 LANE_DETECTED = 1
@@ -125,8 +125,6 @@ class Camera:
 
             # Update pedestrian bndbox. 
             if self.isPedestrian(max_x, midpoints, window): 
-                if self._prev_angle > 0: midpoints = [np.amin(midpoints)] 
-                else: midpoints = [np.amax(midpoints)] 
                 pt = [[np.amin(max_x), padding_top+i*size-20], [np.amax(max_x), padding_top+i*size+20]]
                 if pt[0][0] < self.pedestrianBndbox[0][0]: self.pedestrianBndbox[0][0] = pt[0][0] 
                 if pt[1][0] > self.pedestrianBndbox[1][0]: self.pedestrianBndbox[1][0] = pt[1][0] 
@@ -168,6 +166,28 @@ class Camera:
 
     def sortAndFilterParticlesByContours(self): 
 
+        # Only detect the outer lane if there is pedestrian crossing. 
+        temp_ = list() 
+        filtered_particles = dict() 
+        if self.pedestrianFound: 
+            for a, key in enumerate(self.particles): 
+                if len(temp_) == 0: 
+                    temp_.append(self.particles[key]) 
+                    continue 
+                if not temp_[-1].current[1] == self.particles[key].current[1] or a+1 >= len(self.particles): 
+                    if a+1 >= len(self.particles): temp_.append(self.particles[key]) 
+                    # Get the left most lane. 
+                    if self._prev_angle > 0: 
+                        idx = np.argwhere([p.current[0] for p in temp_] == np.amin([p.current[0] for p in temp_]))[0][0] 
+                    # Get the right most lane. 
+                    else: 
+                        idx = np.argwhere([p.current[0] for p in temp_] == np.amax([p.current[0] for p in temp_]))[0][0] 
+                    filtered_particles[key] = temp_[idx] 
+                    temp_ = [self.particles[key]] 
+            self.particles = filtered_particles 
+
+        # Sort particles by contours. 
+
         # @struct: dict<list: idx of particle>: key=idx of contour
         sortParticlesByContours = dict() 
 
@@ -178,12 +198,6 @@ class Camera:
         for j in sorted([k for k in self.particles]): 
             particle = self.particles[j] 
             if particle is None: continue 
-            # if self.pedestrianFound: 
-            #     if particle.current[0] > self.pedestrianBndbox[0][0] \
-            #         and particle.current[0] < self.pedestrianBndbox[1][0] \
-            #         and particle.current[1] > self.pedestrianBndbox[0][1] \
-            #         and particle.current[1] < self.pedestrianBndbox[1][1]: 
-            #         continue 
             for i, contour in enumerate(self.contours): 
                 distance = cv2.pointPolygonTest(contour, particle.current, True) 
                 if distance >= 0: 
@@ -273,10 +287,12 @@ class Camera:
                 if self.groupedParticles[0][-1].current[0] > cx: self.isOverboundary = True 
         if self.isOverboundary: 
             coefficient = -coefficient / abs(coefficient) 
+            cv2.line(self.img, (int(key_point[-1]), cy), (cx, cy), (255,100,255), 5) 
+            cv2.circle(self.img, (int(key_point[-1]), cy), 10, (255,100,255), -1) 
             cv2.circle(self.img, (int(key_point[-1]), cy), 10, (255,100,255), -1) 
             cv2.putText(self.img, "Overboundary", (cx-100, cy+50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,100,255), 3)
 
-        self._prev_angle = coefficient
+        if not self.pedestrianFound: self._prev_angle = coefficient
 
         cv2.putText(self.img, "%.4f %s"%(coefficient, "<-" if coefficient < 0 else "->"), (cx-100, cy-15), 
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2) 
@@ -313,7 +329,7 @@ class Camera:
         # ifdef ROS 
         if ROS: 
             self.laneJudge = LANE_DETECTED
-            self.cam_cmd.angular.z = coefficient * 1  # TODO: Scale up. 
+            self.cam_cmd.angular.z = coefficient * 14  # TODO: Scale up. 
             self.laneJudgePub.publish(self.laneJudge)
             self.cmdPub.publish(self.cam_cmd)
             self.imagePub.publish(self.cvb.cv2_to_imgmsg(self.binary))  # self.binary
@@ -333,7 +349,7 @@ class Camera:
         
 if __name__ == "__main__":
 
-    cam = Camera(path="../../2/2/origin.avi", record=RECORD) # TODO: Setup camera with path 
+    cam = Camera(path="../../2/origin (2).avi", record=RECORD) # TODO: Setup camera with path 
 
     # ifdef 
     if ROS: 
@@ -349,7 +365,7 @@ if __name__ == "__main__":
     # else 
     else: 
         while cam.detectLane(): 
-            if cv2.waitKey(500) == 27: break  
+            if cv2.waitKey(1) == 27: break  
         cv2.destroyAllWindows() 
     # endif 
        
