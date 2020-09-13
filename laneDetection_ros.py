@@ -90,6 +90,8 @@ class Camera:
         if ROS: 
             self.imagePub = rospy.Publisher('images', Image, queue_size=1)
             self.cmdPub = rospy.Publisher('lane_vel', Twist, queue_size=1)
+            self.laneJudgePub = rospy.Publisher('laneJudge',Int32,queue_size=1)
+            self.laneJudge = LANE_UNDETECTED
             self.cam_cmd = Twist()
             self.cvb = CvBridge()
         # endif 
