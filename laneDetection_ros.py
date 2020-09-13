@@ -93,7 +93,7 @@ class Camera:
             self.dst_wr.release() 
         except: pass 
 
-    def getParticles(self, num_particles=10, padding_top=20, size=60): 
+    def getParticles(self, num_particles=7, padding_top=100, size=60): 
         # @param: num_particles: int: max num of particles. 
         # @param: padding_top: int: verticle spacing from top to the 1st particle. 
 
@@ -115,7 +115,8 @@ class Camera:
 
             # Update pedestrian bndbox. 
             if self.isPedestrian(max_x, midpoints, window): 
-                midpoints = [np.amin(midpoints), np.amax(midpoints)] 
+                if self._prev_angle > 0: midpoints = [np.amin(midpoints)] 
+                else: midpoints = [np.amax(midpoints)] 
                 pt = [[np.amin(max_x), padding_top+i*size-20], [np.amax(max_x), padding_top+i*size+20]]
                 if pt[0][0] < self.pedestrianBndbox[0][0]: self.pedestrianBndbox[0][0] = pt[0][0] 
                 if pt[1][0] > self.pedestrianBndbox[1][0]: self.pedestrianBndbox[1][0] = pt[1][0] 
@@ -167,12 +168,12 @@ class Camera:
         for j in sorted([k for k in self.particles]): 
             particle = self.particles[j] 
             if particle is None: continue 
-            if self.pedestrianFound: 
-                if particle.current[0] > self.pedestrianBndbox[0][0] \
-                    and particle.current[0] < self.pedestrianBndbox[1][0] \
-                    and particle.current[1] > self.pedestrianBndbox[0][1] \
-                    and particle.current[1] < self.pedestrianBndbox[1][1]: 
-                    continue 
+            # if self.pedestrianFound: 
+            #     if particle.current[0] > self.pedestrianBndbox[0][0] \
+            #         and particle.current[0] < self.pedestrianBndbox[1][0] \
+            #         and particle.current[1] > self.pedestrianBndbox[0][1] \
+            #         and particle.current[1] < self.pedestrianBndbox[1][1]: 
+            #         continue 
             for i, contour in enumerate(self.contours): 
                 distance = cv2.pointPolygonTest(contour, particle.current, True) 
                 if distance >= 0: 
@@ -208,79 +209,47 @@ class Camera:
     def decision(self): 
         # if self.pedestrianFound: self._pedestrianSegmentation() 
         self.sortAndFilterParticlesByContours() 
-        if self.pedestrianFound: 
-            try: 
-                # confidence, direction, steerAngle = self._getPedestrianGuideLine() 
-                confidence = 1 
-                steerAngle = self._prev_angle 
-                if steerAngle > 0: direction = "---->" 
-                elif steerAngle < 0: direction = "<----" 
-                else: direction = "Straight"
-                cv2.putText(self.img, "Confidence: {}".format(confidence), (500,50), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0,255,0), 2) 
-                cv2.putText(self.img, "Direction: {}".format(direction), (500,75), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0,255,0), 2) 
-                cv2.putText(self.img, "SteerAngle: %.1f deg"%(steerAngle), (500,100), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0,255,0), 2) 
-                return confidence, direction, steerAngle 
-            except: pass 
 
-        confidence = 0 
-        group_gradient = list() 
+        cx = int(self.img.shape[1]/2) 
+        cy = int(self.img.shape[0]/2) 
+        key_point = list() 
+        poly_eq = list() 
+        cv2.circle(self.img, (cx, cy), 10, (0,255,0), 2) 
+
+        if len(self.groupedParticles) == 0: return 0
 
         for group in self.groupedParticles: 
-            gradient_list = list() 
-            for i, particle in enumerate(group): 
-                if particle is None: continue 
-                confidence += 1 
-                if confidence > 1: 
-                    pt2 = particle.current 
-                    if group[i-1] is None: continue 
-                    pt1 = group[i-1].current 
-                    gradient_list.append( (pt2[1] - pt1[1]) / (pt2[0] - pt1[0] + 1e-5) / 720 * 1280 ) 
+            x_vals = np.array([p.current[0] for p in group])
+            key_point.append( np.average(x_vals) ) 
+            cv2.line(self.img, (int(key_point[-1]), cy), (cx, cy), (0,255,0), 5) 
+            cv2.circle(self.img, (int(key_point[-1]), cy), 10, (100,255,100), -1) 
 
-                    if len(gradient_list) > 1: 
-                        if np.std(gradient_list) > 10: 
-                            confidence -= 1 
-                            gradient_list[-1] += 2 * np.mean(gradient_list[:-2]) 
-                            gradient_list[-1] /= 3
-            
-            # Fit polynomial. 
-            if confidence > 0 or len(group) >= 3:  
-                # Second degree polynomial. 
-                a, b, c = np.polyfit([p.current[0] for p in group], [p.current[1] for p in group], deg=2) 
-                group_gradient.append( a / abs(a) * np.average(gradient_list)  )
+        if len(key_point) >= 2: 
+            left_lane, right_lane = sorted(key_point[:2])  
+        else: 
+            if key_point[0] < cx: 
+                left_lane = key_point[0] 
+                right_lane = self.img.shape[1] + cx 
             else: 
-                group_gradient.append( np.average(gradient_list)  ) 
+                left_lane = -cx 
+                right_lane = key_point[0] 
 
-        weighted = [len(i) for i in self.groupedParticles] / np.sum([len(i) for i in self.groupedParticles]) 
-        avg_gradient = np.sum(np.multiply(group_gradient, weighted))  
+        # Calculate distance. 
+        dist_left = abs(cx - left_lane) 
+        dist_right = abs(right_lane - cy)  
+        dist_total = dist_left + dist_right 
 
-        if str(avg_gradient) == "nan": avg_gradient = 0  
-        if avg_gradient < 0 and avg_gradient > -1000 and confidence > 0: 
-            direction =   1                  # Right
-        elif avg_gradient > 0 and avg_gradient < 1000 and confidence > 0: 
-            direction =   -1                  # Left
-        else: direction = 0; steerAngle = 0   # Straight 
+        # Calculate steer angle coefficient. 
+        l_ratio = dist_left / dist_total 
+        r_ratio = dist_right / dist_total 
+        coefficient = r_ratio - l_ratio 
 
-        # Steering Angle (deg)
-        steerAngle = math.atan(-avg_gradient) * 180 / math.pi + 90 if confidence > 0 else 0 
-        if steerAngle > 90: steerAngle = 180 - steerAngle 
-        if steerAngle > 45: steerAngle = 90 - steerAngle 
+        self._prev_angle = coefficient
 
-        steerAngle *= direction 
-        # if confidence > 0: 
-        #     self.kalman.update(steerAngle) 
-        #     steerAngle = self.kalman.predict()
-        
-        self._prev_angle = steerAngle 
+        cv2.putText(self.img, "%.4f %s"%(coefficient, "<-" if coefficient < 0 else "->"), (cx-100, cy-15), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2) 
 
-        if steerAngle > 0: direction = "---->" 
-        elif steerAngle < 0: direction = "<----" 
-        else: direction = "Straight"
-
-        cv2.putText(self.img, "Confidence: {}".format(confidence), (500,50), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0,255,0), 2) 
-        cv2.putText(self.img, "Direction: {}".format(direction), (500,75), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0,255,0), 2) 
-        cv2.putText(self.img, "SteerAngle: %.1f deg"%(steerAngle), (500,100), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0,255,0), 2) 
-
-        return confidence, direction, steerAngle 
+        return coefficient
         
     def detectLane(self):
         start = time() 
@@ -303,7 +272,7 @@ class Camera:
 
         self.getParticles()
 
-        detectionConfident, driveDirection, steerAngle = self.decision() 
+        coefficient = self.decision() 
         cv2.imshow("thresh", self.binary) 
         cv2.imshow("result", self.img) 
         try: self.dst_wr.write(self.img) 
@@ -312,7 +281,7 @@ class Camera:
         # ifdef ROS 
         if ROS: 
             self.laneJudge = LANE_DETECTED
-            self.cam_cmd.angular.z = steerAngle
+            self.cam_cmd.angular.z = coefficient * 1  # TODO: Scale up. 
             self.laneJudgePub.publish(self.laneJudge)
             self.cmdPub.publish(self.cam_cmd)
             self.imagePub.publish(self.cvb.cv2_to_imgmsg(self.binary))  # self.binary
@@ -334,7 +303,7 @@ class Camera:
         
 if __name__ == "__main__":
 
-    cam = Camera(path="../../2/2/origin.avi", record=RECORD) # Setup camera with path 
+    cam = Camera(path="../../2/origin (2).avi", record=RECORD) # TODO: Setup camera with path 
 
     # ifdef 
     if ROS: 
