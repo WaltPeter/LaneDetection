@@ -240,7 +240,8 @@ class Camera:
         poly_eq = list() 
         cv2.circle(self.img, (cx, cy), 10, (0,255,0), 2) 
 
-        if len(self.groupedParticles) == 0: return 0
+        # No result. 
+        if len(self.groupedParticles) == 0: return False, 0
 
         for group in self.groupedParticles: 
             x_vals = np.array([p.current[0] for p in group])
@@ -297,7 +298,7 @@ class Camera:
         cv2.putText(self.img, "%.4f %s"%(coefficient, "<-" if coefficient < 0 else "->"), (cx-100, cy-15), 
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2) 
 
-        return coefficient
+        return True, coefficient
         
     def detectLane(self):
         start = time() 
@@ -320,7 +321,7 @@ class Camera:
 
         self.getParticles()
 
-        coefficient = self.decision() 
+        isLaneDetected, coefficient = self.decision() 
         cv2.imshow("thresh", self.binary) 
         cv2.imshow("result", self.img) 
         try: self.dst_wr.write(self.img) 
@@ -328,7 +329,7 @@ class Camera:
 
         # ifdef ROS 
         if ROS: 
-            self.laneJudge = LANE_DETECTED
+            self.laneJudge = LANE_DETECTED if isLaneDetected else LANE_UNDETECTED
             tmp = 0
             if abs(coefficient) < 0.5:
                 tmp = coefficient * 1
