@@ -351,7 +351,7 @@ class Camera:
             self.laneJudgePub.publish(self.laneJudge)
             self.pedestrianJudgePub.publish(1 if isPedestrianTarget else 0) 
             self.cmdPub.publish(self.cam_cmd)
-            self.imagePub.publish(self.cvb.cv2_to_imgmsg(self.binary))  # self.binary
+            #self.imagePub.publish(self.cvb.cv2_to_imgmsg(self.binary))  # self.binary
         # endif
         
         cv2.imshow("thresh", self.binary)
