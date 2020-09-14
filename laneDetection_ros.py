@@ -72,7 +72,11 @@ class VideoRecorder:
 
 class Camera:  
     def __init__(self, path="../src2.mp4", record=False):
+
+        self.targetDistance = 300  # TODO: Tune parameter to optimum, when the pedestrian crossing is nearly 20cm from car. 
+
         self.pedestrianFound = False 
+        self.isPedestrianTarget = False 
         self.cap = cv2.VideoCapture(path) 
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280) 
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720) 
@@ -91,6 +95,7 @@ class Camera:
             self.imagePub = rospy.Publisher('images', Image, queue_size=1)
             self.cmdPub = rospy.Publisher('lane_vel', Twist, queue_size=1)
             self.laneJudgePub = rospy.Publisher('laneJudge',Int32,queue_size=1)
+            self.pedestrianJudgePub = rospy.Publisher('pedestrianJudge',Int32,queue_size=1)
             self.laneJudge = LANE_UNDETECTED
             self.cam_cmd = Twist()
             self.cvb = CvBridge()
@@ -226,10 +231,6 @@ class Camera:
                 cv2.circle(self.img, self.particles[particleIdx].current, 10, colors[i], -1) 
         self.particles = filtered_particles
 
-        # Visualize. 
-        if self.pedestrianFound: 
-            cv2.rectangle(self.img, tuple(self.pedestrianBndbox[0]), tuple(self.pedestrianBndbox[1]), (0,255,255), 10) 
-
     def decision(self): 
         # if self.pedestrianFound: self._pedestrianSegmentation() 
         self.sortAndFilterParticlesByContours() 
@@ -241,7 +242,7 @@ class Camera:
         cv2.circle(self.img, (cx, cy), 10, (0,255,0), 2) 
 
         # No result. 
-        if len(self.groupedParticles) == 0: return False, 0
+        if len(self.groupedParticles) == 0: return False, 0, self.isPedestrianTarget
 
         for group in self.groupedParticles: 
             x_vals = np.array([p.current[0] for p in group])
@@ -295,10 +296,21 @@ class Camera:
 
         if not self.pedestrianFound: self._prev_angle = coefficient
 
+        # Check pedestrian is at 20cm distance. 
+        if self.pedestrianFound: 
+            ty = (self.pedestrianBndbox[0][1] + self.pedestrianBndbox[1][1]) / 2 
+            self.isPedestrianTarget = abs(ty - self.targetDistance) < 50 
+        
+        # Visualize. 
+        if self.pedestrianFound: 
+            if self.isPedestrianTarget: color = (255,153,0) 
+            else: color = (0,255,255) 
+            cv2.rectangle(self.img, tuple(self.pedestrianBndbox[0]), tuple(self.pedestrianBndbox[1]), color, 10) 
+
         cv2.putText(self.img, "%.4f %s"%(coefficient, "<-" if coefficient < 0 else "->"), (cx-100, cy-15), 
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2) 
 
-        return True, coefficient
+        return True, coefficient, self.isPedestrianTarget
         
     def detectLane(self):
         start = time() 
@@ -321,7 +333,7 @@ class Camera:
 
         self.getParticles()
 
-        isLaneDetected, coefficient = self.decision() 
+        isLaneDetected, coefficient, isPedestrianTarget = self.decision() 
         cv2.imshow("thresh", self.binary) 
         cv2.imshow("result", self.img) 
         try: self.dst_wr.write(self.img) 
@@ -337,6 +349,7 @@ class Camera:
                 tmp = coefficient * 1
             self.cam_cmd.angular.z = -tmp * 14  # TODO: Scale up. 
             self.laneJudgePub.publish(self.laneJudge)
+            self.pedestrianJudgePub.publish(1 if isPedestrianTarget else 0) 
             self.cmdPub.publish(self.cam_cmd)
             self.imagePub.publish(self.cvb.cv2_to_imgmsg(self.binary))  # self.binary
         # endif
