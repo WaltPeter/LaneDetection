@@ -329,7 +329,12 @@ class Camera:
         # ifdef ROS 
         if ROS: 
             self.laneJudge = LANE_DETECTED
-            self.cam_cmd.angular.z = coefficient * 14  # TODO: Scale up. 
+            tmp = 0
+            if abs(coefficient) < 0.5:
+                tmp = coefficient * 1
+            else:
+                tmp = coefficient * 1
+            self.cam_cmd.angular.z = -tmp * 14  # TODO: Scale up. 
             self.laneJudgePub.publish(self.laneJudge)
             self.cmdPub.publish(self.cam_cmd)
             self.imagePub.publish(self.cvb.cv2_to_imgmsg(self.binary))  # self.binary
