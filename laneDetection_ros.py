@@ -338,7 +338,7 @@ class Camera:
             self.cam_cmd.angular.z = -tmp * 14  # TODO: Scale up. 
             self.laneJudgePub.publish(self.laneJudge)
             self.cmdPub.publish(self.cam_cmd)
-            self.imagePub.publish(self.cvb.cv2_to_imgmsg(self.binary))  # self.binary
+            #self.imagePub.publish(self.cvb.cv2_to_imgmsg(self.binary))  # self.binary
         # endif
         
         cv2.imshow("thresh", self.binary)
