@@ -329,8 +329,8 @@ class Camera:
 
         isLaneDetected, coefficient, isPedestrianTarget = self.decision() 
         
-        try: self.dst_wr.write(self.img) 
-        except: pass # Record dst video. 
+        # try: self.dst_wr.write(self.img) 
+        # except: pass # Record dst video. 
 
         # ifdef ROS 
         if ROS: 
