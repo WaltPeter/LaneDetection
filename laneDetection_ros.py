@@ -8,8 +8,8 @@ from time import time
 
 # define 
 ROS = True  # Enable ROS communication? 
-RECORD = False  # Record videos? 
-SHOW = True  # Show result? 
+RECORD = True  # Record videos? 
+SHOW = False  # Show result? 
 
 LANE_UNDETECTED = 0
 LANE_DETECTED = 1
@@ -190,6 +190,8 @@ class Camera:
                         idx = np.argwhere([p.current[0] for p in temp_] == np.amax([p.current[0] for p in temp_]))[0][0] 
                     filtered_particles[key] = temp_[idx] 
                     temp_ = [self.particles[key]] 
+                else: 
+                    temp_.append(self.particles[key])
             self.particles = filtered_particles 
 
         # Sort particles by contours. 
@@ -295,7 +297,9 @@ class Camera:
             cv2.circle(self.img, (int(key_point[-1]), cy), 10, (255,100,255), -1) 
             cv2.putText(self.img, "Overboundary", (cx-100, cy+50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,100,255), 3)
 
-        if not self.pedestrianFound: self._prev_angle = coefficient
+        if not self.pedestrianFound: 
+            self.kalman.update(coefficient) 
+            self._prev_angle = self.kalman.predict() 
 
         # Check pedestrian is at 20cm distance. 
         if self.pedestrianFound: 
@@ -368,7 +372,8 @@ class Camera:
         
 if __name__ == "__main__":
 
-    cam = Camera(path="../../2/origin (2).avi", record=RECORD) # TODO: Setup camera with path 
+    # cam = Camera(path="../../2/3/origin.avi", record=RECORD) # TODO: Setup camera with path 
+    cam = Camera(path="/dev/video10", record=RECORD) # TODO: Setup camera with path 
 
     # ifdef 
     if ROS: 
@@ -384,7 +389,7 @@ if __name__ == "__main__":
     # else 
     else: 
         while cam.detectLane(): 
-            if cv2.waitKey(1) == 27: break  
+            if cv2.waitKey(500) == 27: break  
         cv2.destroyAllWindows() 
     # endif 
        
