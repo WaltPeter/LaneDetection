@@ -7,9 +7,9 @@ import math
 from time import time 
 
 # define 
-ROS = False  # Enable ROS communication? 
+ROS = True  # Enable ROS communication? 
 RECORD = True  # Record videos? 
-SHOW = True  # Show result? 
+SHOW = False  # Show result? 
 
 LANE_UNDETECTED = 0
 LANE_DETECTED = 1
