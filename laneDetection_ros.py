@@ -108,7 +108,7 @@ class Camera:
             self.dst_wr.release() 
         except: pass 
 
-    def getParticles(self, num_particles=7, padding_top=100, size=60): 
+    def getParticles(self, num_particles=14, padding_top=20, size=50): 
         # @param: num_particles: int: max num of particles. 
         # @param: padding_top: int: verticle spacing from top to the 1st particle. 
 
@@ -335,11 +335,13 @@ class Camera:
         # ifdef ROS 
         if ROS: 
             self.laneJudge = LANE_DETECTED if isLaneDetected else LANE_UNDETECTED
+            # 强制倍增系数
             tmp = 0
             if abs(coefficient) < 0.5: 
                 tmp = coefficient * 1
             else:
                 tmp = coefficient * 1.15
+            # @return range [-1, 1]
             tmp = max(-1, tmp) if tmp < 0 else min(1, tmp)
             self.cam_cmd.angular.z = -tmp * 14  # TODO: Scale up. 
             self.laneJudgePub.publish(self.laneJudge)
