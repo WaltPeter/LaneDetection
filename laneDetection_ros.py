@@ -7,8 +7,9 @@ import math
 from time import time 
 
 # define 
-ROS = False  # Enable ROS communication? 
-RECORD = True  # Record videos? 
+ROS = True  # Enable ROS communication? 
+RECORD = False  # Record videos? 
+SHOW = True  # Show result? 
 
 LANE_UNDETECTED = 0
 LANE_DETECTED = 1
@@ -281,7 +282,7 @@ class Camera:
             if coefficient < 0: 
                 if self.groupedParticles[idxs[1]][-1].current[0] < cx: self.isOverboundary = True 
             else: 
-                if self.groupedParticles[idx[0]][-1].current[0] > cx: self.isOverboundary = True 
+                if self.groupedParticles[idxs[0]][-1].current[0] > cx: self.isOverboundary = True 
         else: 
             if coefficient < 0: 
                 if self.groupedParticles[0][-1].current[0] < cx: self.isOverboundary = True 
@@ -334,8 +335,7 @@ class Camera:
         self.getParticles()
 
         isLaneDetected, coefficient, isPedestrianTarget = self.decision() 
-        cv2.imshow("thresh", self.binary) 
-        cv2.imshow("result", self.img) 
+        
         try: self.dst_wr.write(self.img) 
         except: pass # Record dst video. 
 
@@ -351,11 +351,11 @@ class Camera:
             self.laneJudgePub.publish(self.laneJudge)
             self.pedestrianJudgePub.publish(1 if isPedestrianTarget else 0) 
             self.cmdPub.publish(self.cam_cmd)
-            #self.imagePub.publish(self.cvb.cv2_to_imgmsg(self.binary))  # self.binary
         # endif
         
-        cv2.imshow("thresh", self.binary)
-        cv2.imshow("result", self.img)
+        if SHOW:
+            cv2.imshow("thresh", self.binary)
+            cv2.imshow("result", self.img)
 
         # ifdef ROS 
         if ROS: cv2.waitKey(1)
