@@ -7,9 +7,9 @@ import math
 from time import time 
 
 # define 
-ROS = True  # Enable ROS communication? 
+ROS = False  # Enable ROS communication? 
 RECORD = True  # Record videos? 
-SHOW = False  # Show result? 
+SHOW = True  # Show result? 
 
 LANE_UNDETECTED = 0
 LANE_DETECTED = 1
@@ -75,7 +75,7 @@ class VideoRecorder:
 class Camera:  
     def __init__(self, path="../src2.mp4", record=False):
 
-        self.targetDistance = 300  # TODO: Tune parameter to optimum, when the pedestrian crossing is nearly 20cm from car. 
+        self.targetDistance = 310  # TODO: Tune parameter to optimum, when the pedestrian crossing is nearly 20cm from car. 
 
         self.pedestrianFound = False 
         self.isPedestrianTarget = False 
@@ -110,7 +110,7 @@ class Camera:
             self.dst_wr.release() 
         except: pass 
 
-    def getParticles(self, num_particles=14, padding_top=20, size=50): 
+    def getParticles(self, num_particles=7, padding_top=50, size=60): 
         # @param: num_particles: int: max num of particles. 
         # @param: padding_top: int: verticle spacing from top to the 1st particle. 
 
@@ -305,7 +305,7 @@ class Camera:
         # Check pedestrian is at 20cm distance. 
         if self.pedestrianFound: 
             ty = (self.pedestrianBndbox[0][1] + self.pedestrianBndbox[1][1]) / 2 
-            self.isPedestrianTarget = abs(ty - self.targetDistance) < 50 
+            self.isPedestrianTarget = abs(ty - self.targetDistance) < 100 
         else: self.isPedestrianTarget = False 
         
         # Visualize. 
@@ -338,8 +338,8 @@ class Camera:
 
         isLaneDetected, coefficient, isPedestrianTarget = self.decision() 
         
-        # try: self.dst_wr.write(self.img) 
-        # except: pass # Record dst video. 
+        try: self.dst_wr.write(self.img) 
+        except: pass # Record dst video. 
 
         # ifdef ROS 
         if ROS: 
@@ -347,9 +347,9 @@ class Camera:
             # 强制倍增系数
             tmp = 0
             if abs(coefficient) < 0.5: 
-                tmp = coefficient * 1
+                tmp = coefficient * 0.9
             else:
-                tmp = coefficient * 1.15
+                tmp = coefficient * 1.0
             # @return range [-1, 1]
             tmp = max(-1, tmp) if tmp < 0 else min(1, tmp)
             self.cam_cmd.angular.z = -tmp * 14  # TODO: Scale up. 
@@ -373,7 +373,7 @@ class Camera:
         
 if __name__ == "__main__":
 
-    cam = Camera(path="../../2/2/origin (2).avi", record=RECORD) # TODO: Setup camera with path 
+    cam = Camera(path="../../2/3/origin (2).avi", record=RECORD) # TODO: Setup camera with path 
     # cam = Camera(path="/dev/video10", record=RECORD) # TODO: Setup camera with path 
 
     # ifdef 
