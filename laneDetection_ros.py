@@ -85,6 +85,8 @@ class Camera:
         self.particles = list() 
         self.kalman = KalmanFilter() 
         self.aimKalman = AimPoint(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)/2) 
+        self.maxKalmanIdle = 5 
+        self.kalmanIdle = 0 
         self._prev_angle = 0 
         if record: 
             self.src_wr = VideoRecorder("SRC_")
@@ -235,7 +237,14 @@ class Camera:
         if len(self.groupedParticles) == 0: 
             self.kalman.update(0) 
             self.aimKalman.update(self.img.shape[1]/2) 
-            return False, 0, self.isPedestrianTarget
+            if self.kalmanIdle < self.maxKalmanIdle: 
+                coefficient = self.kalman.predict() 
+                self.kalmanIdle += 1 
+                return True, coefficient, self.isPedestrianTarget 
+            else: 
+                return False, 0, self.isPedestrianTarget
+        
+        self.kalmanIdle = 0 
 
         for group in self.groupedParticles: 
             x_vals = np.array([p[0] for p in group])
