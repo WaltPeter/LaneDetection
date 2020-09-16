@@ -373,8 +373,8 @@ class Camera:
         
 if __name__ == "__main__":
 
-    cam = Camera(path="../../2/3/origin (2).avi", record=RECORD) # TODO: Setup camera with path 
-    # cam = Camera(path="/dev/video10", record=RECORD) # TODO: Setup camera with path 
+    # cam = Camera(path="../../2/3/origin (2).avi", record=RECORD) # TODO: Setup camera with path 
+    cam = Camera(path="/dev/video10", record=RECORD) # TODO: Setup camera with path 
 
     # ifdef 
     if ROS: 
