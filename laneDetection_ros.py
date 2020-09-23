@@ -9,10 +9,10 @@ import threading
 
 # define 
 
-ROS = True  # Enable ROS communication? 
+ROS = False  # Enable ROS communication? 
 RECORD = False  # Record videos? 
-SHOW = False  # Show result? 
-PYTHON2 = True
+SHOW = True  # Show result? 
+PYTHON2 = False
 
 if PYTHON2:
     from Queue import Queue
@@ -96,7 +96,7 @@ class Camera:
             fps = 20 
             size = (1280, 720) 
             format = cv2.VideoWriter_fourcc('M','J','P','G') 
-            self.src_video_writer = cv2.VideoWriter("src_output.avi", format, fps, size) 
+            self.src_video_writer = cv2.VideoWriter("/home/pi/Videos/src_output.avi", format, fps, size) 
 
  
     def getFrame(self):
@@ -149,7 +149,7 @@ class PictureProcessor:
     def __del__(self):
         print("laneDetection quitting ...")
 
-    def getParticles(self, num_particles=7, padding_top=50, size=60): 
+    def getParticles(self, num_particles=20, padding_top=50, size=30): 
         # @param: num_particles: int: max num of particles. 
         # @param: padding_top: int: verticle spacing from top to the 1st particle. 
 
@@ -160,7 +160,7 @@ class PictureProcessor:
 
         for i in range(num_particles): 
             # Get horizontal argmax from window. 
-            window = self.binary[padding_top+i*size-20:padding_top+i*size+20, :]
+            window = self.binary[padding_top+i*size-5:padding_top+i*size+5, :]
             if np.sum(window) < window.shape[0] * window.shape[1] * 255 * 0.02: continue 
             histogram_x = np.sum(window, axis=0) 
             max_x = np.argwhere(histogram_x == np.amax(histogram_x)) 
@@ -200,7 +200,7 @@ class PictureProcessor:
 
     def isPedestrian(self, iterable, midpoints, roi): 
         status = np.std(iterable) > 100 \
-            and ( (np.sum(roi) > (np.amax(iterable) - np.amin(iterable)) * roi.shape[0] * 255* 0.5) \
+            and ( (np.sum(roi) > roi.shape[1] * roi.shape[0] * 255* 0.4) \
             or len(midpoints) >= 3)
         return status
 
@@ -244,7 +244,7 @@ class PictureProcessor:
                 # Is this particle in this contour. 
                 distance = cv2.pointPolygonTest(contour, particle, True) 
                 if distance >= 0: temp_.append(particle) 
-            self.groupedParticles.append(temp_) 
+            self.groupedParticles.append(temp_[:14]) 
 
         # Sort groups by num of particle and get maximum 2 groups. 
         self.groupedParticles = sorted(self.groupedParticles, key=lambda x: len(x), reverse=True)[:2]  
@@ -294,6 +294,12 @@ class PictureProcessor:
 
         idxs = [0,1]
         if len(key_point) >= 2: 
+            key_point = sorted(key_point[:2])  
+            if key_point[0] < cx and key_point[1] < cx: 
+                key_point.pop(np.argmax(key_point)) 
+            elif key_point[0] > cx and key_point[1] > cx: 
+                key_point.pop(np.argmin(key_point)) 
+        if len(key_point) >= 2: 
             if key_point[1] < key_point[0]: idx = [1,0]
             left_lane, right_lane = sorted(key_point[:2])  
         else: 
@@ -316,36 +322,15 @@ class PictureProcessor:
         coefficient = max(r_ratio, l_ratio)-0.5 if r_ratio > l_ratio else -max(r_ratio, l_ratio)+0.5 
         coefficient *= 2 
 
-        # Overboundary check. 
-        self.isOverboundary = False 
-        if abs(coefficient) > 0.5: 
-            if len(key_point) >= 2: 
-                if coefficient < 0: 
-                    if self.groupedParticles[idxs[1]][-1][0] < cx: self.isOverboundary = True 
-                else: 
-                    if self.groupedParticles[idxs[0]][-1][0] > cx: self.isOverboundary = True 
-            else: 
-                if coefficient < 0: 
-                    if self.groupedParticles[0][-1][0] < cx: self.isOverboundary = True 
-                else: 
-                    if self.groupedParticles[0][-1][0] > cx: self.isOverboundary = True 
-        if self.isOverboundary: 
-            coefficient = -coefficient / abs(coefficient) 
-            cv2.line(self.img, (int(key_point[-1]), cy), (cx, cy), (255,100,255), 5) 
-            cv2.circle(self.img, (int(key_point[-1]), cy), 10, (255,100,255), -1) 
-            cv2.circle(self.img, (int(key_point[-1]), cy), 10, (255,100,255), -1) 
-            cv2.putText(self.img, "Overboundary", (cx-100, cy+50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,100,255), 3)
-
         if not self.pedestrianFound: 
             self.kalman.update(coefficient) 
             self._prev_angle = coefficient = self.kalman.predict() 
-        else: coefficient = self.kalman.predict() 
         self.aimKalman.update(self.img.shape[1]/2 + math.pow(coefficient, 3) * 200) 
 
         # Check pedestrian is at 20cm distance. 
         if self.pedestrianFound: 
             ty = (self.pedestrianBndbox[0][1] + self.pedestrianBndbox[1][1]) / 2 
-            self.isPedestrianTarget = abs(ty - self.targetDistance) < 150
+            self.isPedestrianTarget = abs(ty - self.targetDistance) < 150 and self.pedestrianBndbox[1][1] - self.pedestrianBndbox[0][1] > 100 
         else: self.isPedestrianTarget = False 
         
         # Visualize. 
@@ -369,8 +354,10 @@ class PictureProcessor:
         self.img = cv2.resize(self.img[480:], (self.img.shape[1], self.img.shape[0]))  
 
         # Preprocessing. 
-        # self.binary = cv2.threshold(cv2.cvtColor(self.img, cv2.COLOR_BGR2GRAY), 125, 255, cv2.THRESH_BINARY)[1]
-        self.binary = cv2.inRange(cv2.cvtColor(self.img, cv2.COLOR_BGR2HSV), (0, 0, 180), (180, 40, 255)) 
+        # gray = cv2.cvtColor(self.img, cv2.COLOR_BGR2GRAY) 
+        # thresh = (np.max(gray) + np.mean(gray)) / 2
+        # self.binary = cv2.threshold(gray, int(thresh), 255, cv2.THRESH_BINARY)[1]
+        self.binary = cv2.inRange(cv2.cvtColor(self.img, cv2.COLOR_BGR2HSV), (0, 0, 135), (180, 30, 255)) 
 
         self.getParticles()
 
@@ -381,7 +368,7 @@ class PictureProcessor:
         # ifdef ROS 
         if ROS: 
             self.laneJudge = LANE_DETECTED if isLaneDetected else LANE_UNDETECTED
-            # ǿ�Ʊ���ϵ��
+            # ｿｿｿｿｿｿｿｿｿ
             tmp = 0
             if abs(coefficient) < 0.55: 
                 if abs(coefficient) < 0.45:
@@ -402,7 +389,7 @@ class PictureProcessor:
         # endif
         
         if SHOW:
-            # cv2.imshow("thresh", self.binary)
+            cv2.imshow("thresh", self.binary)
             cv2.imshow("result", self.img)
 
         # ifdef ROS 
@@ -464,7 +451,7 @@ class PictureProcessorThreadGuard(threading.Thread):
             try: 
                 while not SHUTDOWN_SIG: 
                     self.__pp.detectLane(src_img_buff.get()) 
-                    if cv2.waitKey(1) == 27: break  
+                    if cv2.waitKey(500) == 27: break  
                 cv2.destroyAllWindows() 
             except: pass
         # endif 
@@ -476,8 +463,8 @@ if __name__ == "__main__":
         rospy.init_node("lane_vel", anonymous=True)
         rate = rospy.Rate(30)
     src_img_buff = Queue(1)
-    # video_path = "../../2/origin (2).avi"
-    video_path = "E:\\aboutme\\huawei_self_driving\\videos\\lane\\lane.mp4"
+    video_path = "src_output.mp4"
+    # video_path = "E:\\aboutme\\huawei_self_driving\\videos\\lane\\lane.mp4"
     # video_path = "/dev/video10"
 
 
@@ -494,7 +481,7 @@ if __name__ == "__main__":
             t.start()
 
         # Wait for complete. 
-        while True:
+        while not SHUTDOWN_SIG:
             time.sleep(1)
 
         for t in thread_lists:
@@ -507,4 +494,5 @@ if __name__ == "__main__":
         print('exit') 
     
     print("End:0")
+
 
