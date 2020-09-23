@@ -96,7 +96,7 @@ class Camera:
             fps = 20 
             size = (1280, 720) 
             format = cv2.VideoWriter_fourcc('M','J','P','G') 
-            self.src_video_writer = cv2.VideoWriter("/home/pi/Videos/src_output.avi", format, fps, size) 
+            self.src_video_writer = cv2.VideoWriter("src_output.avi", format, fps, size) 
 
  
     def getFrame(self):
@@ -149,7 +149,7 @@ class PictureProcessor:
     def __del__(self):
         print("laneDetection quitting ...")
 
-    def getParticles(self, num_particles=20, padding_top=50, size=30): 
+    def getParticles(self, num_particles=7, padding_top=50, size=60): 
         # @param: num_particles: int: max num of particles. 
         # @param: padding_top: int: verticle spacing from top to the 1st particle. 
 
@@ -200,7 +200,7 @@ class PictureProcessor:
 
     def isPedestrian(self, iterable, midpoints, roi): 
         status = np.std(iterable) > 100 \
-            and ( (np.sum(roi) > roi.shape[1] * roi.shape[0] * 255* 0.4) \
+            and ( (np.sum(roi) > (np.amax(iterable) - np.amin(iterable)) * roi.shape[0] * 255* 0.5) \
             or len(midpoints) >= 3)
         return status
 
@@ -294,12 +294,6 @@ class PictureProcessor:
 
         idxs = [0,1]
         if len(key_point) >= 2: 
-            key_point = sorted(key_point[:2])  
-            if key_point[0] < cx and key_point[1] < cx: 
-                key_point.pop(np.argmax(key_point)) 
-            elif key_point[0] > cx and key_point[1] > cx: 
-                key_point.pop(np.argmin(key_point)) 
-        if len(key_point) >= 2: 
             if key_point[1] < key_point[0]: idx = [1,0]
             left_lane, right_lane = sorted(key_point[:2])  
         else: 
@@ -351,13 +345,16 @@ class PictureProcessor:
         if img is None:  
             return False 
 
+        start = time.time() * 1000 
+
         self.img = cv2.resize(self.img[480:], (self.img.shape[1], self.img.shape[0]))  
 
         # Preprocessing. 
-        # gray = cv2.cvtColor(self.img, cv2.COLOR_BGR2GRAY) 
-        # thresh = (np.max(gray) + np.mean(gray)) / 2
-        # self.binary = cv2.threshold(gray, int(thresh), 255, cv2.THRESH_BINARY)[1]
+        # self.binary = cv2.threshold(cv2.cvtColor(self.img, cv2.COLOR_BGR2GRAY), 125, 255, cv2.THRESH_BINARY)[1]
         self.binary = cv2.inRange(cv2.cvtColor(self.img, cv2.COLOR_BGR2HSV), (0, 0, 135), (180, 30, 255)) 
+
+        print(start - time.time() * 1000 ) 
+        start = time.time() * 1000
 
         self.getParticles()
 
@@ -368,7 +365,7 @@ class PictureProcessor:
         # ifdef ROS 
         if ROS: 
             self.laneJudge = LANE_DETECTED if isLaneDetected else LANE_UNDETECTED
-            # ｿｿｿｿｿｿｿｿｿ
+            # Manual multiplier. 
             tmp = 0
             if abs(coefficient) < 0.55: 
                 if abs(coefficient) < 0.45:
@@ -389,7 +386,7 @@ class PictureProcessor:
         # endif
         
         if SHOW:
-            cv2.imshow("thresh", self.binary)
+            # cv2.imshow("thresh", self.binary)
             cv2.imshow("result", self.img)
 
         # ifdef ROS 
@@ -402,6 +399,8 @@ class PictureProcessor:
             self.__fps_start = time.time()
         else:
             self.__fps = self.__fps + 1
+
+        print(start - time.time() * 1000 , "\n") 
 
         return True 
 
@@ -451,7 +450,7 @@ class PictureProcessorThreadGuard(threading.Thread):
             try: 
                 while not SHUTDOWN_SIG: 
                     self.__pp.detectLane(src_img_buff.get()) 
-                    if cv2.waitKey(500) == 27: break  
+                    if cv2.waitKey(1) == 27: break  
                 cv2.destroyAllWindows() 
             except: pass
         # endif 
@@ -463,8 +462,8 @@ if __name__ == "__main__":
         rospy.init_node("lane_vel", anonymous=True)
         rate = rospy.Rate(30)
     src_img_buff = Queue(1)
-    video_path = "src_output.mp4"
-    # video_path = "E:\\aboutme\\huawei_self_driving\\videos\\lane\\lane.mp4"
+    video_path = "../../2/origin (2).avi"
+    # video_path = "E:\\aboutme\\huawei_self_driving\\videos\\lane\\src_output.mp4"
     # video_path = "/dev/video10"
 
 
@@ -481,7 +480,7 @@ if __name__ == "__main__":
             t.start()
 
         # Wait for complete. 
-        while not SHUTDOWN_SIG:
+        while True:
             time.sleep(1)
 
         for t in thread_lists:
@@ -494,5 +493,4 @@ if __name__ == "__main__":
         print('exit') 
     
     print("End:0")
-
 
