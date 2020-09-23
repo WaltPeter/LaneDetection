@@ -4,12 +4,24 @@ import cv2
 import numpy as np 
 import datetime 
 import math 
-from time import time 
+import time
+import threading
 
 # define 
-ROS = False  # Enable ROS communication? 
-RECORD = True  # Record videos? 
-SHOW = True  # Show result? 
+
+ROS = True  # Enable ROS communication? 
+RECORD = False  # Record videos? 
+SHOW = False  # Show result? 
+PYTHON2 = True
+
+if PYTHON2:
+    from Queue import Queue
+else:
+    from queue import Queue
+
+
+
+SHUTDOWN_SIG = False 
 
 LANE_UNDETECTED = 0
 LANE_DETECTED = 1
@@ -40,6 +52,7 @@ class KalmanFilter:
 
     def predict(self): 
         return self._kalman.predict()[0,0]
+
 
 class AimPoint: 
     def __init__(self, x): 
@@ -72,25 +85,55 @@ class VideoRecorder:
         self.writer.release() 
 
 
-class Camera:  
-    def __init__(self, path="../src2.mp4", record=False):
-
-        self.targetDistance = 310  # TODO: Tune parameter to optimum, when the pedestrian crossing is nearly 20cm from car. 
-
-        self.pedestrianFound = False 
-        self.isPedestrianTarget = False 
+class Camera: 
+    
+    def __init__(self, path): 
         self.cap = cv2.VideoCapture(path) 
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280) 
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720) 
+
+        if RECORD: 
+            fps = 20 
+            size = (1280, 720) 
+            format = cv2.VideoWriter_fourcc('M','J','P','G') 
+            self.src_video_writer = cv2.VideoWriter("src_output.avi", format, fps, size) 
+
+ 
+    def getFrame(self):
+        ret, frame = self.cap.read() 
+        if not ret: 
+            frame = None
+        
+        ret = frame
+
+        if frame is not None and RECORD:
+            self.src_video_writer.write(frame)
+    
+        return ret
+
+    def display(self, frame):
+        cv2.imshow("results", frame) 
+
+    def __del__(self):
+        self.cap.release() 
+
+    def close(self): 
+        self.__del__() 
+
+
+class PictureProcessor:  
+    def __init__(self, path="../src2.mp4", record=False):
+        self.__fps_start = time.time()
+        self.targetDistance = 260  # TODO: Tune parameter to optimum, when the pedestrian crossing is nearly 20cm from car. 
+        self.__fps = 0
+        self.pedestrianFound = False 
+        self.isPedestrianTarget = False 
         self.particles = list() 
         self.kalman = KalmanFilter() 
-        self.aimKalman = AimPoint(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)/2) 
+        self.aimKalman = AimPoint(1280/2) 
         self.maxKalmanIdle = 5 
         self.kalmanIdle = 0 
         self._prev_angle = 0 
-        if record: 
-            self.src_wr = VideoRecorder("SRC_")
-            self.dst_wr = VideoRecorder("DST_") 
 
         # ifdef ROS 
         if ROS: 
@@ -104,11 +147,7 @@ class Camera:
         # endif 
 
     def __del__(self):
-        self.cap.release()
-        try: 
-            self.src_wr.release() 
-            self.dst_wr.release() 
-        except: pass 
+        print("laneDetection quitting ...")
 
     def getParticles(self, num_particles=7, padding_top=50, size=60): 
         # @param: num_particles: int: max num of particles. 
@@ -299,13 +338,14 @@ class Camera:
 
         if not self.pedestrianFound: 
             self.kalman.update(coefficient) 
-            self._prev_angle = self.kalman.predict() 
+            self._prev_angle = coefficient = self.kalman.predict() 
+        else: coefficient = self.kalman.predict() 
         self.aimKalman.update(self.img.shape[1]/2 + math.pow(coefficient, 3) * 200) 
 
         # Check pedestrian is at 20cm distance. 
         if self.pedestrianFound: 
             ty = (self.pedestrianBndbox[0][1] + self.pedestrianBndbox[1][1]) / 2 
-            self.isPedestrianTarget = abs(ty - self.targetDistance) < 100 
+            self.isPedestrianTarget = abs(ty - self.targetDistance) < 150
         else: self.isPedestrianTarget = False 
         
         # Visualize. 
@@ -319,37 +359,40 @@ class Camera:
 
         return True, coefficient, self.isPedestrianTarget
         
-    def detectLane(self):
-        start = time() 
+    def detectLane(self, img):
         
         # Grab raw image. 
-        ret, self.img = self.cap.read()
-        if not ret: return ret 
-        try: self.src_wr.write(self.img) 
-        except: pass # Record src video. 
+        self.img = img
+        if img is None:  
+            return False 
 
         self.img = cv2.resize(self.img[480:], (self.img.shape[1], self.img.shape[0]))  
 
         # Preprocessing. 
         # self.binary = cv2.threshold(cv2.cvtColor(self.img, cv2.COLOR_BGR2GRAY), 125, 255, cv2.THRESH_BINARY)[1]
-        self.binary = cv2.inRange(cv2.cvtColor(self.img, cv2.COLOR_BGR2HSV), (0, 0, 200), (180, 40, 255)) 
+        self.binary = cv2.inRange(cv2.cvtColor(self.img, cv2.COLOR_BGR2HSV), (0, 0, 180), (180, 40, 255)) 
 
         self.getParticles()
 
         isLaneDetected, coefficient, isPedestrianTarget = self.decision() 
-        
-        try: self.dst_wr.write(self.img) 
-        except: pass # Record dst video. 
+        # try: self.dst_wr.write(self.img) 
+        # except: pass # Record dst video. 
 
         # ifdef ROS 
         if ROS: 
             self.laneJudge = LANE_DETECTED if isLaneDetected else LANE_UNDETECTED
-            # 强制倍增系数
+            # ǿ�Ʊ���ϵ��
             tmp = 0
-            if abs(coefficient) < 0.5: 
-                tmp = coefficient * 0.9
+            if abs(coefficient) < 0.55: 
+                if abs(coefficient) < 0.45:
+                    tmp = coefficient * 0.4
+                else:
+                    tmp = coefficient * 0.8
             else:
-                tmp = coefficient * 1.0
+                if abs(coefficient) < 0.7:
+                    tmp = coefficient * 1
+                else:
+                    tmp = coefficient * 1.2
             # @return range [-1, 1]
             tmp = max(-1, tmp) if tmp < 0 else min(1, tmp)
             self.cam_cmd.angular.z = -tmp * 14  # TODO: Scale up. 
@@ -359,38 +402,109 @@ class Camera:
         # endif
         
         if SHOW:
-            cv2.imshow("thresh", self.binary)
+            # cv2.imshow("thresh", self.binary)
             cv2.imshow("result", self.img)
 
         # ifdef ROS 
         if ROS: cv2.waitKey(1)
 
-        duration = time() - start 
-        print("fps", 1/duration) 
+        if self.__fps == 30:
+            duration = time.time() - self.__fps_start 
+            print("fps", self.__fps/duration) 
+            self.__fps = 0
+            self.__fps_start = time.time()
+        else:
+            self.__fps = self.__fps + 1
 
-        return ret 
+        return True 
 
-        
-if __name__ == "__main__":
+    def close(self):
+        self.__del__()
 
-    # cam = Camera(path="../../2/3/origin (2).avi", record=RECORD) # TODO: Setup camera with path 
-    cam = Camera(path="/dev/video10", record=RECORD) # TODO: Setup camera with path 
 
-    # ifdef 
-    if ROS: 
-        rospy.init_node("lane_vel", anonymous=True)
-        rate = rospy.Rate(10)
+class CameraThreadGuard(threading.Thread):
+    def __init__(self, video_path=""):
+        threading.Thread.__init__(self)
+        self.__cam = Camera(video_path)
+    
+    def run(self):
+        global src_img_buff, SHUTDOWN_SIG
         try:
-            while not rospy.is_shutdown():
-                cam.detectLane()
-                rate.sleep()
-        except rospy.ROSInterruptException:
-            print(rospy.ROSInterruptException)
-            pass
-    # else 
-    else: 
-        while cam.detectLane(): 
-            if cv2.waitKey(500) == 27: break  
+            while True:
+                frame = self.__cam.getFrame()
+                if frame is not None:
+                    src_img_buff.put(frame)
+                else: self.__cam.close(); break 
+        finally:
+            SHUTDOWN_SIG = True 
+            print('cam ended')
+
+
+class PictureProcessorThreadGuard(threading.Thread):
+    def __init__(self):
+        threading.Thread.__init__(self)
+        self.__pp = PictureProcessor()
+    
+    def run(self):
+        global src_img_buff, SHUTDOWN_SIG
+        # ifdef 
+        if ROS: 
+
+            try:
+                while not rospy.is_shutdown():
+                    self.__pp.detectLane(src_img_buff.get())
+                    rate.sleep()
+            except rospy.ROSInterruptException:
+                SHUTDOWN_SIG = True
+                self.__pp.close()
+                print(rospy.ROSInterruptException)
+                pass
+        # else 
+        else: 
+            try: 
+                while not SHUTDOWN_SIG: 
+                    self.__pp.detectLane(src_img_buff.get()) 
+                    if cv2.waitKey(1) == 27: break  
+                cv2.destroyAllWindows() 
+            except: pass
+        # endif 
+        print('pp ended') 
+
+
+if __name__ == "__main__":
+    if ROS:
+        rospy.init_node("lane_vel", anonymous=True)
+        rate = rospy.Rate(30)
+    src_img_buff = Queue(1)
+    # video_path = "../../2/origin (2).avi"
+    video_path = "E:\\aboutme\\huawei_self_driving\\videos\\lane\\lane.mp4"
+    # video_path = "/dev/video10"
+
+
+    cam_thread = CameraThreadGuard(video_path=video_path)
+    pp_thread = PictureProcessorThreadGuard()
+
+    thread_lists = [cam_thread, pp_thread]
+
+    for t in thread_lists:
+        t.setDaemon(True)
+    print("start")
+    try:
+        for t in thread_lists:
+            t.start()
+
+        # Wait for complete. 
+        while True:
+            time.sleep(1)
+
+        for t in thread_lists:
+            t.join()
+
+    except KeyboardInterrupt:
+        SHUTDOWN_SIG = False
+        print("KeyboardInterrupt")
         cv2.destroyAllWindows() 
-    # endif 
-       
+        print('exit') 
+    
+    print("End:0")
+
