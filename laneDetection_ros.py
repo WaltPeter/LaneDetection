@@ -12,7 +12,7 @@ import threading
 ROS = False  # Enable ROS communication?
 RECORD = False  # Record videos?
 SHOW = True  # Show result?
-PYTHON2 = False 
+PYTHON2 = False
 
 if PYTHON2:
     from Queue import Queue
@@ -24,6 +24,8 @@ SHUTDOWN_SIG = False
 
 LANE_UNDETECTED = 0
 LANE_DETECTED = 1
+
+CIRCLE_TYPE_WITH_PEDESTRIAN = False 
 
 # ifdef
 if ROS:
@@ -131,8 +133,18 @@ class History:
         self._hist = [(0, False) for i in range(3)] 
 
     def update(self, coefficient, detected): 
+        new_coefficient = coefficient 
+        new_detected = detected 
+        
+        if True in [a[1] for a in self._hist] and not detected: 
+            idx = [i for i in range(self._hist_length) if self._hist[i][1]][-1]
+            new_coefficient = self._hist[idx][0] 
+            new_detected = True 
+
         self._hist.pop(0) 
         self._hist.append((coefficient, detected)) 
+
+        return new_coefficient, new_detected 
 
 
 class PictureProcessor:
@@ -146,6 +158,7 @@ class PictureProcessor:
         self.particles = list()
         self.kalman = KalmanFilter()
         self.aimKalman = AimPoint(1280/2)
+        self.historyFilter = History() 
         self.maxKalmanIdle = 5
         self.kalmanIdle = 0
         self._prev_angle = 0
@@ -166,7 +179,7 @@ class PictureProcessor:
     def __del__(self):
         print("laneDetection quitting ...")
 
-    def getParticles(self, num_particles=7, padding_top=50, size=60):
+    def getParticles(self, num_particles=10, padding_top=50, size=60):
         # @param: num_particles: int: max num of particles.
         # @param: padding_top: int: verticle spacing from top to the 1st particle.
 
@@ -295,6 +308,48 @@ class PictureProcessor:
         self.groupedParticles = filtered_particles
         self.particles = [p for group in self.groupedParticles for p in group]
 
+    def __calCoefficient(self, coefficient):
+        global CIRCLE_TYPE_WITH_PEDESTRIAN
+        tmp = 0
+
+        if CIRCLE_TYPE_WITH_PEDESTRIAN:
+            # Manual multiplier.
+            if abs(coefficient) < 0.55:
+                if abs(coefficient) < 0.45:
+                    tmp = coefficient * 0.8
+                    if coefficient > 0:
+                        tmp = coefficient * 0.2
+
+                else:
+                    tmp = coefficient * 1.2
+                    if coefficient > 0:
+                        tmp = coefficient * 0.8
+            else:
+                if abs(coefficient) < 0.7:
+                    tmp = coefficient * 1.3
+                    if coefficient > 0:
+                        tmp = coefficient * 1
+                else:
+                    tmp = coefficient * 1.3
+                    if coefficient > 0:
+                        tmp = coefficient * 1
+        else:
+            tmp = 0
+            if abs(coefficient) < 0.55:
+                if abs(coefficient) < 0.45:
+                    tmp = coefficient * 0.4
+                else:
+                    tmp = coefficient * 0.8
+            else:
+                if abs(coefficient) < 0.7:
+                    tmp = coefficient * 1
+                else:
+                    tmp = coefficient * 1.2
+            
+        # @return range [-1, 1]
+        tmp = max(-1, tmp) if tmp < 0 else min(1, tmp)
+        return tmp * (-15)
+
     def decision(self):
         # if self.pedestrianFound: self._pedestrianSegmentation()
         self.sortAndFilterParticlesByContours()
@@ -309,14 +364,12 @@ class PictureProcessor:
 
         # No result.
         if len(self.groupedParticles) == 0:
+            coefficient, detected = self.historyFilter.update(0, False) 
             self.kalman.update(0)
             self.aimKalman.update(self.img.shape[1]/2)
-            if self.kalmanIdle < self.maxKalmanIdle:
-                coefficient = self._prev_angle # self.kalman.predict()
-                self.kalmanIdle += 1
-                return True, coefficient, self.isPedestrianTarget
-            else:
-                return False, 0, self.isPedestrianTarget
+            cv2.putText(self.img, "%.4f %s" % (coefficient, "<-" if coefficient < 0 else "->"), (cx-100, cy-15),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 150, 255), 2)
+            return detected, coefficient, self.isPedestrianTarget
 
         self.kalmanIdle = 0
 
@@ -355,31 +408,41 @@ class PictureProcessor:
             0.5 if r_ratio > l_ratio else -max(r_ratio, l_ratio)+0.5
         coefficient *= 2
 
-        # Overboundary check. 
-        self.isOverboundary = False 
-        if abs(coefficient) > 0.5: 
-            if len(key_point) >= 2: 
-                if coefficient < 0: 
-                    if self.groupedParticles[idxs[1]][-1][0] < cx: self.isOverboundary = True 
-                else: 
-                    if self.groupedParticles[idxs[0]][-1][0] > cx: self.isOverboundary = True 
-            else: 
-                if coefficient < 0: 
-                    if self.groupedParticles[0][-1][0] < cx: self.isOverboundary = True 
-                else: 
-                    if self.groupedParticles[0][-1][0] > cx: self.isOverboundary = True 
-        if self.isOverboundary and not self.pedestrianFound: 
-            coefficient = -coefficient / abs(coefficient) 
-            cv2.line(self.img, (int(key_point[-1]), cy), (cx, cy), (255,100,255), 5) 
-            cv2.circle(self.img, (int(key_point[-1]), cy), 10, (255,100,255), -1) 
-            cv2.circle(self.img, (int(key_point[-1]), cy), 10, (255,100,255), -1) 
-            cv2.putText(self.img, "Overboundary", (cx-100, cy+50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,100,255), 3)
+        self.historyFilter.update(coefficient, True)
 
-        # if not self.pedestrianFound:
-        self.kalman.update(coefficient)
-        self._prev_angle = coefficient = self.kalman.predict() 
-        self.aimKalman.update(
-            self.img.shape[1]/2 + math.pow(coefficient, 3) * 200)
+        # Overboundary check.
+        self.isOverboundary = False
+        if abs(coefficient) > 0.5:
+            if len(key_point) >= 2:
+                if coefficient < 0:
+                    if self.groupedParticles[idxs[1]][-1][0] < cx:
+                        self.isOverboundary = True
+                else:
+                    if self.groupedParticles[idxs[0]][-1][0] > cx:
+                        self.isOverboundary = True
+            else:
+                if coefficient < 0:
+                    if self.groupedParticles[0][-1][0] < cx:
+                        self.isOverboundary = True
+                else:
+                    if self.groupedParticles[0][-1][0] > cx:
+                        self.isOverboundary = True
+        if self.isOverboundary and not self.pedestrianFound:
+            coefficient = -coefficient / abs(coefficient)
+            cv2.line(
+                self.img, (int(key_point[-1]), cy), (cx, cy), (255, 100, 255), 5)
+            cv2.circle(
+                self.img, (int(key_point[-1]), cy), 10, (255, 100, 255), -1)
+            cv2.circle(
+                self.img, (int(key_point[-1]), cy), 10, (255, 100, 255), -1)
+            cv2.putText(self.img, "Overboundary", (cx-100, cy+50),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 100, 255), 3)
+
+        if not self.pedestrianFound:
+            self.kalman.update(coefficient)
+            self._prev_angle = coefficient = self.kalman.predict()
+            self.aimKalman.update(
+                self.img.shape[1]/2 + math.pow(coefficient, 3) * 200)
 
         # Check pedestrian is at 20cm distance.
         if self.pedestrianFound:
@@ -428,21 +491,7 @@ class PictureProcessor:
         # ifdef ROS
         if ROS:
             self.laneJudge = LANE_DETECTED if isLaneDetected else LANE_UNDETECTED
-            # Manual multiplier.
-            tmp = 0
-            if abs(coefficient) < 0.55:
-                if abs(coefficient) < 0.45:
-                    tmp = coefficient * 0.6
-                else:
-                    tmp = coefficient * 0.8
-            else:
-                if abs(coefficient) < 0.7:
-                    tmp = coefficient * 1
-                else:
-                    tmp = coefficient * 1.2
-            # @return range [-1, 1]
-            tmp = max(-1, tmp) if tmp < 0 else min(1, tmp)
-            self.cam_cmd.angular.z = -tmp * 14  # TODO: Scale up.
+            self.cam_cmd.angular.z = self.__calCoefficient(coefficient)
             self.laneJudgePub.publish(self.laneJudge)
             self.pedestrianJudgePub.publish(1 if isPedestrianTarget else 0)
             self.cmdPub.publish(self.cam_cmd)
@@ -451,7 +500,7 @@ class PictureProcessor:
         if SHOW:
             cv2.imshow("thresh", self.binary)
             cv2.imshow("result", self.img)
-            cv2.waitKey(1)
+            cv2.waitKey(500)
 
         # ifdef ROS
 
@@ -525,7 +574,7 @@ if __name__ == "__main__":
         rospy.init_node("lane_vel", anonymous=True)
         rate = rospy.Rate(30)
     src_img_buff = Queue(1)
-    video_path = "30.mp4"
+    video_path = "35.mp4"
     # video_path = "E:\\aboutme\\huawei_self_driving\\videos\\lane\\src_output.mp4"
     # video_path = "/dev/video10"
 
@@ -555,4 +604,3 @@ if __name__ == "__main__":
         print('exit')
 
     print("End:0")
-
