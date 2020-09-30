@@ -9,10 +9,10 @@ import threading
 
 # define
 
-ROS = False  # Enable ROS communication?
+ROS = True  # Enable ROS communication?
 RECORD = False  # Record videos?
-SHOW = True  # Show result?
-PYTHON2 = False
+SHOW = False  # Show result?
+PYTHON2 = True
 
 if PYTHON2:
     from Queue import Queue
@@ -25,7 +25,13 @@ SHUTDOWN_SIG = False
 LANE_UNDETECTED = 0
 LANE_DETECTED = 1
 
-CIRCLE_TYPE_WITH_PEDESTRIAN = False 
+LANE_TURN_LEFT                  = 1
+LANE_TURN_RIGHT                   = 2
+CIRCLE_TURN         = LANE_TURN_LEFT
+
+SPEED_LIMITED = 1
+SPEED_UNLIMITED = 0
+IS_SPEED_LIMITED = SPEED_LIMITED
 
 # ifdef
 if ROS:
@@ -35,7 +41,13 @@ if ROS:
     from std_msgs.msg import Int32
     from cv_bridge import CvBridge
 # endif
+def lane_directionJudgecallback(msg):
+    global CIRCLE_TURN
+    CIRCLE_TURN = msg.data
 
+def speedlimitedwithlaneJudgecallback(msg):
+    global IS_SPEED_LIMITED
+    IS_SPEED_LIMITED = msg.data
 
 class KalmanFilter:
     def __init__(self):
@@ -146,12 +158,19 @@ class History:
 
         return new_coefficient, new_detected 
 
+    def getPolyFit(self): 
+        x = [i for i in range(self._hist_length)] 
+        y = [a[0] for a in self._hist] 
+        a, b, c = np.polyfit(x, y, 2) 
+        nx = 4 
+        return a* nx**2 + b* nx + c 
+
 
 class PictureProcessor:
     def __init__(self, path="../src2.mp4", record=False):
         self.__fps_start = time.time()
         # TODO: Tune parameter to optimum, when the pedestrian crossing is nearly 20cm from car.
-        self.targetDistance = 260
+        self.targetDistance = 100
         self.__fps = 0
         self.pedestrianFound = False
         self.isPedestrianTarget = False
@@ -171,6 +190,8 @@ class PictureProcessor:
                 'laneJudge', Int32, queue_size=1)
             self.pedestrianJudgePub = rospy.Publisher(
                 'pedestrianJudge', Int32, queue_size=1)
+            rospy.Subscriber("/lane_directionJudge", Int32,lane_directionJudgecallback,queue_size=1)
+            rospy.Subscriber("/speed_limited_with_laneJudge", Int32,speedlimitedwithlaneJudgecallback, queue_size=1 )
             self.laneJudge = LANE_UNDETECTED
             self.cam_cmd = Twist()
             self.cvb = CvBridge()
@@ -249,10 +270,51 @@ class PictureProcessor:
         temp_ = list()
         filtered_particles = list()
         if self.pedestrianFound:
+
+            bin_inv = 255 - self.binary
+            _, contours, _ = cv2.findContours(bin_inv, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE) 
+            rects = list() 
+            for contour in contours: 
+                center, size, angle = cv2.minAreaRect(contour) 
+                if size[0] * size[1] > 0.3 * self.binary.shape[0] * self.binary.shape[1] or \
+                    size[0] * size[1] < 0.01 * self.binary.shape[0] * self.binary.shape[1]: 
+                    continue 
+                rects.append((center, size, angle)) 
+            rects = sorted(rects, key=lambda x:x[2]) 
+            start = -1; end = len(rects)-1 
+            for i, rect in enumerate(rects): 
+                if i == 0: continue 
+                if abs(rect[2] - rects[i-1][2]) > 30: 
+                    if start == -1: start = i 
+                    else: end = i; break 
+            
+            if len(rects) > 0: 
+                start = 0 if start == -1 else start 
+                rects = sorted(rects[start:end+1], key=lambda x:x[0][0]) 
+                box_left = np.int0(cv2.boxPoints(rects[0]))
+                box_right = np.int0(cv2.boxPoints(rects[-1]))
+                arg_left_x = np.argmin([pt[0] for pt in box_left]) 
+                arg_right_x = np.argmax([pt[0] for pt in box_right]) 
+                left_x = box_left[arg_left_x][0] 
+                right_x = box_right[arg_right_x][0] 
+                low_y = np.max((box_left[arg_left_x][1], box_right[arg_right_x][1])) 
+            else: 
+                left_x = 0 
+                right_x = 0 
+                low_y = self.img.shape[0] 
+
+            # for rect in rects: 
+            #     box = cv2.boxPoints(rect) 
+            #     box = np.int0(box)
+            #     cv2.drawContours(bin_inv, [box], 0, (125), 5) 
+            # cv2.imshow("cont", bin_inv)
+            # cv2.waitKey(0)
+
             for a, particle in enumerate(self.particles):
                 if len(temp_) == 0:
                     temp_.append(particle)
                     continue
+                if particle[0] > left_x and particle[0] < right_x and particle[1] > low_y: continue 
                 if not temp_[-1][1] == particle[1] or a+1 >= len(self.particles):
                     if a+1 >= len(self.particles):
                         temp_.append(particle)
@@ -289,7 +351,14 @@ class PictureProcessor:
                 distance = cv2.pointPolygonTest(contour, particle, True)
                 if distance >= 0:
                     temp_.append(particle)
-            self.groupedParticles.append(temp_[:14])
+            # if len(temp_) > 3: 
+            #     xs = [a[0] for a in temp_] 
+            #     ys = [a[1] for a in temp_] 
+            #     p = np.polynomial.Polynomial.fit(xs, ys, 2) 
+            #     new_ys = [int(150+i*50) for i in range(10)] 
+            #     new_xs = [int((p-y).roots()) for y in new_ys] 
+            #     temp_ = [(new_xs[i], new_ys[i]) for i in range(len(new_xs))] 
+            self.groupedParticles.append(temp_)
 
         # Sort groups by num of particle and get maximum 2 groups.
         self.groupedParticles = sorted(
@@ -309,33 +378,12 @@ class PictureProcessor:
         self.particles = [p for group in self.groupedParticles for p in group]
 
     def __calCoefficient(self, coefficient):
-        global CIRCLE_TYPE_WITH_PEDESTRIAN
-        tmp = 0
-
-        if CIRCLE_TYPE_WITH_PEDESTRIAN:
-            # Manual multiplier.
-            if abs(coefficient) < 0.55:
-                if abs(coefficient) < 0.45:
-                    tmp = coefficient * 0.8
-                    if coefficient > 0:
-                        tmp = coefficient * 0.2
-
-                else:
-                    tmp = coefficient * 1.2
-                    if coefficient > 0:
-                        tmp = coefficient * 0.8
-            else:
-                if abs(coefficient) < 0.7:
-                    tmp = coefficient * 1.3
-                    if coefficient > 0:
-                        tmp = coefficient * 1
-                else:
-                    tmp = coefficient * 1.3
-                    if coefficient > 0:
-                        tmp = coefficient * 1
-        else:
-            tmp = 0
-            if abs(coefficient) < 0.55:
+        global CIRCLE_TURN
+        global IS_SPEED_LIMITED
+        tmp = coefficient
+        #CIRCLE_TURN = LANE_TURN_LEFT
+        if IS_SPEED_LIMITED == SPEED_LIMITED:
+            if abs(coefficient) < 0.55: 
                 if abs(coefficient) < 0.45:
                     tmp = coefficient * 0.4
                 else:
@@ -345,7 +393,50 @@ class PictureProcessor:
                     tmp = coefficient * 1
                 else:
                     tmp = coefficient * 1.2
+
+        else:
+            if CIRCLE_TURN == LANE_TURN_LEFT:
+                # Manual multiplier.
+                print("turn left")
+                if abs(coefficient) < 0.55:
+                    if abs(coefficient) < 0.45:
+                        tmp = coefficient * 1
+                        if coefficient > 0:
+                            tmp = coefficient * 0.1
+
+                    else:
+                        tmp = coefficient * 1.4
+                        if coefficient > 0:
+                            tmp = coefficient * 0.8
+                else:
+                    if abs(coefficient) < 0.7:
+                        tmp = coefficient * 1.3
+                        if coefficient > 0:
+                            tmp = coefficient * 1
+                    else:
+                        tmp = coefficient * 1.3
+                        if coefficient > 0:
+                            tmp = coefficient * 1
+
+            elif CIRCLE_TURN == LANE_TURN_RIGHT:
+                print("turn right")
+                if abs(coefficient) < 0.55:
+                    if abs(coefficient) < 0.45:
+                        tmp = coefficient * 0.65
+                        if coefficient < 0:
+                            tmp = coefficient * 0.2
+                    else:
+                        tmp = coefficient * 1
+                        if coefficient < 0:
+                            tmp = coefficient * 0.5
+                else:
+                    if abs(coefficient) < 0.7:
+                        tmp = coefficient * 1.1
+                    else:
+                        tmp = coefficient * 1.2
+
             
+        
         # @return range [-1, 1]
         tmp = max(-1, tmp) if tmp < 0 else min(1, tmp)
         return tmp * (-15)
@@ -370,6 +461,12 @@ class PictureProcessor:
             cv2.putText(self.img, "%.4f %s" % (coefficient, "<-" if coefficient < 0 else "->"), (cx-100, cy-15),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 150, 255), 2)
             return detected, coefficient, self.isPedestrianTarget
+
+        # if self.pedestrianFound: 
+        #     coefficient = self.historyFilter.getPolyFit() 
+        #     cv2.putText(self.img, "%.4f %s" % (coefficient, "<-" if coefficient < 0 else "->"), (cx-100, cy-15),
+        #             cv2.FONT_HERSHEY_SIMPLEX, 1, (150, 0, 255), 2)
+        #     return True, coefficient, True 
 
         self.kalmanIdle = 0
 
@@ -446,10 +543,10 @@ class PictureProcessor:
 
         # Check pedestrian is at 20cm distance.
         if self.pedestrianFound:
-            ty = (self.pedestrianBndbox[0][1] +
-                  self.pedestrianBndbox[1][1]) / 2
-            self.isPedestrianTarget = abs(
-                ty - self.targetDistance) < 150 and self.pedestrianBndbox[1][1] - self.pedestrianBndbox[0][1] > 100
+            # pedestrian height.  
+            ty = abs(self.pedestrianBndbox[0][1] -
+                  self.pedestrianBndbox[1][1]) 
+            self.isPedestrianTarget = ty > self.targetDistance
         else:
             self.isPedestrianTarget = False
 
@@ -492,6 +589,7 @@ class PictureProcessor:
         if ROS:
             self.laneJudge = LANE_DETECTED if isLaneDetected else LANE_UNDETECTED
             self.cam_cmd.angular.z = self.__calCoefficient(coefficient)
+            #print("angular.z:   ",self.cam_cmd.angular.z)
             self.laneJudgePub.publish(self.laneJudge)
             self.pedestrianJudgePub.publish(1 if isPedestrianTarget else 0)
             self.cmdPub.publish(self.cam_cmd)
@@ -500,7 +598,7 @@ class PictureProcessor:
         if SHOW:
             cv2.imshow("thresh", self.binary)
             cv2.imshow("result", self.img)
-            cv2.waitKey(500)
+            cv2.waitKey(1)
 
         # ifdef ROS
 
@@ -559,12 +657,12 @@ class PictureProcessorThreadGuard(threading.Thread):
                 pass
         # else
         else:
-            try:
+            # try:
                 while not SHUTDOWN_SIG:
                     self.__pp.detectLane(src_img_buff.get())
                 cv2.destroyAllWindows()
-            except:
-                pass
+            # except Exception as e: 
+            #     print(e)
         # endif
         print('pp ended')
 
@@ -574,9 +672,9 @@ if __name__ == "__main__":
         rospy.init_node("lane_vel", anonymous=True)
         rate = rospy.Rate(30)
     src_img_buff = Queue(1)
-    video_path = "35.mp4"
-    # video_path = "E:\\aboutme\\huawei_self_driving\\videos\\lane\\src_output.mp4"
-    # video_path = "/dev/video10"
+    # video_path = "30.mp4"
+    # video_path = "E:\\aboutme\\huawei_self_driving\\videos\\lane\\35.mp4"
+    video_path = "/dev/video10"
 
     cam_thread = CameraThreadGuard(video_path=video_path)
     pp_thread = PictureProcessorThreadGuard()
@@ -604,3 +702,7 @@ if __name__ == "__main__":
         print('exit')
 
     print("End:0")
+
+
+
+
